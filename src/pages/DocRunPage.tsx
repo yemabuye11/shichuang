@@ -5,13 +5,14 @@ import HomeIcon from '@mui/icons-material/Home';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SaveIcon from '@mui/icons-material/Save';
+import EditIcon from '@mui/icons-material/Edit';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DocRenderer } from '@/components/editor/DocRenderer';
 import { EmptyState } from '@/components/common/EmptyState';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { AiDisclaimer } from '@/components/common/AiDisclaimer';
 import { useToast } from '@/components/common/ToastHost';
-import { docRunPath, ROUTES } from '@/config/routes';
+import { docEditPath, docRunPath, ROUTES } from '@/config/routes';
 import { getDocTypeLabel } from '@/config/constants';
 import * as docService from '@/services/docService';
 import type { DocModel } from '@/types/doc';
@@ -166,6 +167,15 @@ export function DocRunPage(): JSX.Element {
             复制链接
           </Button>
           <Button
+            variant="outlined"
+            size="small"
+            startIcon={<EditIcon />}
+            onClick={() => navigate(id ? docEditPath(id) : ROUTES.HOME)}
+            sx={{ borderColor: 'divider', color: 'text.primary', bgcolor: '#fff' }}
+          >
+            编辑
+          </Button>
+          <Button
             variant="text"
             size="small"
             startIcon={<HomeIcon />}
@@ -202,6 +212,15 @@ export function DocRunPage(): JSX.Element {
       <Divider sx={{ my: 3 }} />
 
       <Stack direction="row" spacing={1.25}>
+        <Button
+          variant="outlined"
+          size="large"
+          startIcon={<EditIcon />}
+          onClick={() => navigate(id ? docEditPath(id) : ROUTES.HOME)}
+          sx={{ flex: 1, minHeight: 50, borderColor: 'divider', color: 'text.primary', bgcolor: '#fff' }}
+        >
+          在线编辑
+        </Button>
         <Button
           variant="contained"
           size="large"

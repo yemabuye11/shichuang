@@ -75,3 +75,12 @@ export function remixPath(remixAppId: string, prompt: string): string {
 export function docRunPath(docId: string): string {
   return `${ROUTES.DOC_RUN}/${encodeURIComponent(docId)}`;
 }
+
+/**
+ * 拼接文档在线编辑页路径（UI-5，T08）。
+ *
+ * @param docId 文档（应用）UUID。
+ */
+export function docEditPath(docId: string): string {
+  return `${ROUTES.DOC_RUN}/${encodeURIComponent(docId)}/edit`;
+}

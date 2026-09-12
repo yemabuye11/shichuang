@@ -21,6 +21,7 @@ const GeneratePage = lazy(() => import('@/pages/GeneratePage'));
 const GeneratingPage = lazy(() => import('@/pages/GeneratingPage'));
 const AppRunPage = lazy(() => import('@/pages/AppRunPage'));
 const DocRunPage = lazy(() => import('@/pages/DocRunPage'));
+const DocEditorPage = lazy(() => import('@/pages/DocEditorPage'));
 const SquarePage = lazy(() => import('@/pages/SquarePage'));
 const MePage = lazy(() => import('@/pages/MePage'));
 const MyAppsPage = lazy(() => import('@/pages/MyAppsPage'));
@@ -54,6 +55,8 @@ export const router = createBrowserRouter([
       { path: 'app/:id', element: withSuspense(<AppRunPage />) },
       // 公开：文档运行页（apps.category='doc' 的网页链接，平台可信壳，无 iframe sandbox）
       { path: 'd/:id', element: withSuspense(<DocRunPage />) },
+      // 公开：文档在线编辑页（UI-5 / T08，复用 DocModel 源，编辑后存新版本）
+      { path: 'd/:id/edit', element: withSuspense(<DocEditorPage />) },
       { path: 'square', element: withSuspense(<SquarePage />) },
       {
         path: 'me',
