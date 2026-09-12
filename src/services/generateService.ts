@@ -338,6 +338,7 @@ async function persistMockApp(
     docType: input.docType ?? (category === 'doc' ? (req.docType as string) : undefined),
     docJsonUrl: input.docJsonUrl ?? null,
     docJson: input.docJson ?? null,
+    textbookVersionId: req.textbookVersionId ?? null,
   });
   // 写本地副本：结果页与 /app/:id 立即可渲染（ARCHITECTURE.md §2.4 第一道保险）
   try {

@@ -136,7 +136,7 @@ export interface DocModel {
   readonly createdAt?: string;
 }
 
-/** 教材版本（级联 5 维 + 上传 + 状态）。对应 T07 的 `textbook_versions` 表。 */
+/** 教材版本（级联 5 维 + 章节 + 上传 + 状态）。对应 T07 的 `textbook_versions` 表。 */
 export interface TextbookVersion {
   readonly id: string;
   readonly authorId: string;
@@ -145,7 +145,38 @@ export interface TextbookVersion {
   readonly publisher: string;
   readonly subject: string;
   readonly grade: string;
+  /** 章节（选填；与生成请求里的 chapter 自由文本对齐）。 */
+  readonly chapter?: string | null;
   readonly uploadUrl: string | null;
   readonly status: 'draft' | 'verified';
   readonly createdAt: string;
+}
+
+/** 教材知识点沉淀状态。 */
+export type KnowledgeStatus = 'pending' | 'verified';
+
+/** 教材知识点来源。 */
+export type KnowledgeSource = 'ai' | 'teacher' | 'upload';
+
+/** 教材知识点（对应 T07 的 `textbook_knowledge` 表）。 */
+export interface TextbookKnowledge {
+  readonly id: string;
+  readonly textbookVersionId: string;
+  readonly section: string;
+  readonly content: string;
+  readonly status: KnowledgeStatus;
+  readonly verifiedBy?: string | null;
+  readonly source: KnowledgeSource;
+  readonly createdAt: string;
+}
+
+/**
+ * 教材级联筛选项（前端 UI 用，供教师按维度收窄版本列表）。
+ */
+export interface TextbookCascadeOptions {
+  readonly grades: readonly string[];
+  readonly subjects: readonly string[];
+  readonly publishers: readonly string[];
+  readonly versions: readonly string[];
+  readonly years: readonly string[];
 }

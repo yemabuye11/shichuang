@@ -2,7 +2,7 @@ import { getMeta, putMeta } from '@/utils/idb';
 import { REGISTER_GIFT } from '@/config/creditRules';
 import { buildDemoApps, ensureDemoHtml } from './mockSeed';
 import type { AppStatus, AppType, HtmlStatus, LedgerReason, ReportStatus, RedemptionStatus } from '@/types/enums';
-import type { Category, DocType, VerifyStatus } from '@/types/doc';
+import type { Category, DocType, TextbookKnowledge, TextbookVersion, VerifyStatus } from '@/types/doc';
 import type {
   App,
   CreditAccount,
@@ -38,6 +38,10 @@ export interface MockState {
   codes: RedemptionCode[];
   /** 本地举报（管理员后台演示用）。 */
   reports: ReportItem[];
+  /** T07：本地教材版本（mock 下供级联选择）。 */
+  textbookVersions: TextbookVersion[];
+  /** T07：本地教材知识点沉淀（mock 下供缓存命中与教师补写）。 */
+  textbookKnowledge: TextbookKnowledge[];
 }
 
 function emptyState(): MockState {
@@ -50,6 +54,8 @@ function emptyState(): MockState {
     seeded: false,
     codes: [],
     reports: [],
+    textbookVersions: [],
+    textbookKnowledge: [],
     plans: [
       { id: 'free', name: '体验版', credits: 0, durationDays: 0, priceCny: 0, description: '注册即赠送', sortOrder: 0, enabled: true },
       { id: 'basic', name: '标准版', credits: 200, durationDays: 365, priceCny: 9.9, description: '适合一位老师一学年', sortOrder: 1, enabled: true },
@@ -78,6 +84,12 @@ export async function load(): Promise<MockState> {
     const demo = buildDemoApps().filter((a) => !demoIds.has(a.id));
     state.apps = [...demo, ...state.apps];
     state.seeded = true;
+    await persist();
+  }
+
+  // 播种示例教材版本（只播一次，供 mock 下级联选择演示）
+  if (state.textbookVersions.length === 0) {
+    state.textbookVersions = buildSampleTextbookVersions();
     await persist();
   }
 
@@ -230,6 +242,8 @@ export function addApp(input: {
   docJsonUrl?: string | null;
   /** T06：MOCK 模式下的本地 DocModel JSON 原文。 */
   docJson?: string | null;
+  /** T07：绑定的教材版本 id（来自生成请求）。 */
+  textbookVersionId?: string | null;
 }): App {
   const now = new Date().toISOString();
   const category = input.category ?? 'app';
@@ -271,7 +285,7 @@ export function addApp(input: {
     docJsonUrl: category === 'doc' ? (input.docJsonUrl ?? null) : null,
     docVersion: category === 'doc' ? 1 : null,
     verifyStatus: category === 'doc' ? ('pending' as VerifyStatus) : null,
-    textbookVersionId: null,
+    textbookVersionId: input.textbookVersionId ?? null,
     docJson: category === 'doc' ? (input.docJson ?? null) : null,
     createdAt: now,
     updatedAt: now,
@@ -423,4 +437,107 @@ export async function saveDocVersion(docId: string, docJson: string | null): Pro
   );
   await persist();
   return version;
+}
+
+// ---------------------------------------------------------------------------
+// T07 教材版本与知识点（mock 本地实现）
+// ---------------------------------------------------------------------------
+
+/**
+ * 构造示例教材版本（mock 演示用，覆盖常见年级 / 学科 / 出版社组合）。
+ */
+function buildSampleTextbookVersions(): TextbookVersion[] {
+  const now = new Date().toISOString();
+  const base = [
+    { grade: '九年级', subject: '数学', publisher: '人教版', version: '2024版', year: '2024', chapter: '第二十六章 反比例函数' },
+    { grade: '六年级', subject: '语文', publisher: '部编版', version: '2024版', year: '2024', chapter: '第三单元 阅读策略' },
+    { grade: '高一', subject: '物理', publisher: '人教版', version: '2019版', year: '2019', chapter: '第三章 相互作用' },
+    { grade: '八年级', subject: '英语', publisher: '外研版', version: '2024版', year: '2024', chapter: 'Module 5 Lao She Teahouse' },
+  ];
+  return base.map((b, i) => ({
+    id: `mock-tv-${i + 1}`,
+    authorId: state.profile?.id ?? 'mock-user',
+    year: b.year,
+    version: b.version,
+    publisher: b.publisher,
+    subject: b.subject,
+    grade: b.grade,
+    chapter: b.chapter,
+    uploadUrl: null,
+    status: 'verified' as const,
+    createdAt: now,
+  }));
+}
+
+/** 列出本地教材版本（mock 级联选择）。 */
+export function listTextbookVersions(): TextbookVersion[] {
+  return state.textbookVersions;
+}
+
+/**
+ * 新增一个本地教材版本（mock 上传 / 登记）。
+ *
+ * @param input 版本维度字段。
+ * @returns 新版本。
+ */
+export function addTextbookVersion(input: {
+  year: string;
+  version: string;
+  publisher: string;
+  subject: string;
+  grade: string;
+  chapter?: string | null;
+  uploadUrl?: string | null;
+}): TextbookVersion {
+  const now = new Date().toISOString();
+  const v: TextbookVersion = {
+    id: `mock-tv-${nextId()}`,
+    authorId: state.profile?.id ?? 'mock-user',
+    year: input.year,
+    version: input.version,
+    publisher: input.publisher,
+    subject: input.subject,
+    grade: input.grade,
+    chapter: input.chapter ?? null,
+    uploadUrl: input.uploadUrl ?? null,
+    status: 'draft',
+    createdAt: now,
+  };
+  state.textbookVersions = [v, ...state.textbookVersions];
+  void persist();
+  return v;
+}
+
+/** 列出某版本的本地知识点（mock 命中缓存判断）。 */
+export function listTextbookKnowledge(versionId: string): TextbookKnowledge[] {
+  return state.textbookKnowledge.filter((k) => k.textbookVersionId === versionId);
+}
+
+/**
+ * 沉淀一条教材知识点（mock 教师补写 / 上传电子版）。
+ *
+ * @param versionId 教材版本 id。
+ * @param section 章节 / 小节。
+ * @param content 知识点内容。
+ * @returns 新知识点。
+ */
+export function depositTextbookKnowledge(
+  versionId: string,
+  section: string,
+  content: string,
+): TextbookKnowledge {
+  const now = new Date().toISOString();
+  const k: TextbookKnowledge = {
+    id: `mock-tk-${nextId()}`,
+    textbookVersionId: versionId,
+    section,
+    content,
+    status: 'verified',
+    verifiedBy: state.profile?.id ?? 'mock-user',
+    source: 'teacher',
+    createdAt: now,
+  };
+  state.textbookKnowledge = [k, ...state.textbookKnowledge];
+  void persist();
+  return k;
 }
