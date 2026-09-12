@@ -339,6 +339,100 @@ export function HomePage(): JSX.Element {
         </Typography>
       </Box>
 
+      {/* ================= 做互动应用（原提示词输入区，现前置到首屏下方） ================= */}
+      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
+        <SectionHeading eyebrow="INTERACTIVE APPS" title="做互动应用 · 一句话生成" />
+        <Box
+          sx={{
+            borderRadius: { xs: 4, sm: 5 },
+            border: '1.5px solid',
+            borderColor: 'divider',
+            bgcolor: '#fff',
+            p: { xs: 2, sm: 3 },
+            boxShadow: '0 8px 30px rgba(27,31,39,0.06)',
+          }}
+        >
+          <PromptInput
+            value={prompt}
+            onChange={(v) => {
+              setPrompt(v);
+              if (error) setError('');
+            }}
+            minRows={3}
+            error={error}
+            helper="描述得越具体，效果越好：说清 学科 + 年级 + 玩法 + 题量"
+            id="home-prompt"
+          />
+
+          <Box sx={{ display: 'flex', justifyContent: { xs: 'stretch', sm: 'flex-end' }, mt: 1.5 }}>
+            <Button
+              variant="contained"
+              size="large"
+              onClick={handleSubmit}
+              endIcon={<ArrowForwardIcon />}
+              sx={{ minHeight: 52, px: 3.5, fontSize: 16, width: { xs: '100%', sm: 'auto' } }}
+            >
+              生成应用
+            </Button>
+          </Box>
+
+          {/* 8 类胶囊 */}
+          <Box sx={{ mt: 2.5 }}>
+            <TypeSelector value={appType} onChange={setAppType} variant="chips" />
+          </Box>
+
+          {/* 示例 chips */}
+          <Box sx={{ mt: 2.5 }}>
+            <ExampleChips
+              onPick={(text, type) => {
+                setPrompt(text);
+                setAppType(type);
+                setError('');
+              }}
+            />
+          </Box>
+        </Box>
+      </Box>
+
+      {/* ================= 大家都在用 ================= */}
+      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2.5 }}>
+          <SectionHeading eyebrow="COMMUNITY" title="大家都在用" />
+          <Button
+            variant="text"
+            size="large"
+            onClick={() => navigate(ROUTES.SQUARE)}
+            sx={{ minHeight: 44, color: 'primary.main', fontWeight: 600 }}
+          >
+            查看全部 ›
+          </Button>
+        </Stack>
+
+        {hotLoading ? (
+          <InlineLoading message="正在加载热门应用…" />
+        ) : hot.length === 0 ? (
+          <Typography sx={{ fontSize: 15, color: 'text.secondary', py: 3, textAlign: 'center' }}>
+            还没有人发布应用，你可以成为第一个。
+          </Typography>
+        ) : (
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: {
+                xs: 'repeat(1, minmax(0, 1fr))',
+                sm: 'repeat(2, minmax(0, 1fr))',
+                md: 'repeat(4, minmax(0, 1fr))',
+              },
+              gap: 2,
+            }}
+          >
+            {hot.map((item) => (
+              <AppCard key={item.id} item={item} hot />
+            ))}
+          </Box>
+        )}
+      </Box>
+
       {/* ================= 核心亮点（01–05） ================= */}
       <Box sx={{ mt: { xs: 5, sm: 7 } }}>
         <SectionHeading eyebrow="CORE FEATURES" title="一个台子，备齐全部课程物料" />
@@ -454,100 +548,6 @@ export function HomePage(): JSX.Element {
             );
           })}
         </Box>
-      </Box>
-
-      {/* ================= 做互动应用（底部保留的入口，原提示词输入区） ================= */}
-      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
-        <SectionHeading eyebrow="INTERACTIVE APPS" title="做互动应用 · 一句话生成" />
-        <Box
-          sx={{
-            borderRadius: { xs: 4, sm: 5 },
-            border: '1.5px solid',
-            borderColor: 'divider',
-            bgcolor: '#fff',
-            p: { xs: 2, sm: 3 },
-            boxShadow: '0 8px 30px rgba(27,31,39,0.06)',
-          }}
-        >
-          <PromptInput
-            value={prompt}
-            onChange={(v) => {
-              setPrompt(v);
-              if (error) setError('');
-            }}
-            minRows={3}
-            error={error}
-            helper="描述得越具体，效果越好：说清 学科 + 年级 + 玩法 + 题量"
-            id="home-prompt"
-          />
-
-          <Box sx={{ display: 'flex', justifyContent: { xs: 'stretch', sm: 'flex-end' }, mt: 1.5 }}>
-            <Button
-              variant="contained"
-              size="large"
-              onClick={handleSubmit}
-              endIcon={<ArrowForwardIcon />}
-              sx={{ minHeight: 52, px: 3.5, fontSize: 16, width: { xs: '100%', sm: 'auto' } }}
-            >
-              生成应用
-            </Button>
-          </Box>
-
-          {/* 8 类胶囊 */}
-          <Box sx={{ mt: 2.5 }}>
-            <TypeSelector value={appType} onChange={setAppType} variant="chips" />
-          </Box>
-
-          {/* 示例 chips */}
-          <Box sx={{ mt: 2.5 }}>
-            <ExampleChips
-              onPick={(text, type) => {
-                setPrompt(text);
-                setAppType(type);
-                setError('');
-              }}
-            />
-          </Box>
-        </Box>
-      </Box>
-
-      {/* ================= 大家都在用 ================= */}
-      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2.5 }}>
-          <SectionHeading eyebrow="COMMUNITY" title="大家都在用" />
-          <Button
-            variant="text"
-            size="large"
-            onClick={() => navigate(ROUTES.SQUARE)}
-            sx={{ minHeight: 44, color: 'primary.main', fontWeight: 600 }}
-          >
-            查看全部 ›
-          </Button>
-        </Stack>
-
-        {hotLoading ? (
-          <InlineLoading message="正在加载热门应用…" />
-        ) : hot.length === 0 ? (
-          <Typography sx={{ fontSize: 15, color: 'text.secondary', py: 3, textAlign: 'center' }}>
-            还没有人发布应用，你可以成为第一个。
-          </Typography>
-        ) : (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: {
-                xs: 'repeat(1, minmax(0, 1fr))',
-                sm: 'repeat(2, minmax(0, 1fr))',
-                md: 'repeat(4, minmax(0, 1fr))',
-              },
-              gap: 2,
-            }}
-          >
-            {hot.map((item) => (
-              <AppCard key={item.id} item={item} hot />
-            ))}
-          </Box>
-        )}
       </Box>
 
       {/* ================= 底部 CTA ================= */}
