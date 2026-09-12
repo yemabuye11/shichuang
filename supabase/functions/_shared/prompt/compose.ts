@@ -6,7 +6,7 @@
  * 因此：**禁止**把时间戳、随机数、用户昵称、学科年级等动态内容放进 system 段。
  */
 
-import { getTemplate, versionTag } from './loader.ts';
+import { getTemplate, versionTag, TEXTBOOK_AWARE_SECTION } from './loader.ts';
 
 /** system 段的固定拼装顺序（顺序变了缓存也会失效，不要随意调整）。 */
 const SYSTEM_SECTIONS: readonly string[] = [
@@ -27,7 +27,7 @@ const DOC_SYSTEM_SECTIONS: readonly string[] = [
   'system_section:pedagogy',
   'system_section:safety',
   'system_section:code_quality',
-  'system_section:textbook_aware',
+  TEXTBOOK_AWARE_SECTION,
 ];
 
 export interface ComposeInput {
@@ -193,7 +193,12 @@ export async function composeDoc(input: ComposeDocInput): Promise<Composed> {
     : input.prompt;
 
   if (input.textbookContext && input.textbookContext.trim().length > 0) {
-    userPrompt += `\n\n---\n\n# 教材上下文（请优先对齐此内容）\n${input.textbookContext.trim()}`;
+    userPrompt +=
+      '\n\n---\n\n' +
+      '# 教材上下文（请优先对齐以下教材内容，确保事实、定义、例题、年份、政策与教材一致）\n' +
+      input.textbookContext.trim() +
+      '\n\n注意：凡涉及教材具体事实、数据、例题、年份或政策的内容，若无法从上方教材上下文确认，' +
+      '请在输出 DocModel 的 verifyHints 中逐条列出「待教师核对」的要点，方便教师核对。';
   }
 
   return {

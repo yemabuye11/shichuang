@@ -36,6 +36,7 @@ import { validateDoc, buildDocRepairPrompt, MAX_DOC_BYTES } from '../_shared/doc
 import { renderDoc } from '../_shared/doc/render.ts';
 import { isDocType, type DocModel } from '../_shared/doc/types.ts';
 import { assertUnderMonthlyCap, checkTokenLimit, costOf, currentPeriod } from '../_shared/cost.ts';
+import { getSearchAdapter } from '../_shared/search/index.ts';
 
 /** 单次生成超时（毫秒）。 */
 const MODEL_TIMEOUT_MS = 120_000;
@@ -215,6 +216,27 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
           // ---- 4. 拼装文档提示词 ----
           send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
+
+          // ---- 4.5 教材检索阶段（T07 textbook_search）----
+          // 有 textbookVersionId 时：先查 textbook_knowledge 缓存 → 命中则复用（省检索成本）；
+          // 未命中且配置了搜索密钥 → 联网检索并沉淀待核对知识；任何失败/无密钥 → 兜底为版本元信息，保证生成不中断。
+          let textbookContext = body.textbookContext ?? '';
+          if (body.textbookVersionId) {
+            send('stage', { stage: 'textbook_search', label: '检索教材内容', status: 'running' });
+            try {
+              const resolved = await resolveTextbookContext({
+                versionId: body.textbookVersionId,
+                chapter: body.textbookContext,
+                sb,
+              });
+              textbookContext = resolved.context || textbookContext;
+            } catch (searchErr) {
+              // 检索链路整体兜底：继续生成，结果会由 composeDoc 的「待核对」硬约束标注
+              console.warn('[generate:doc] 教材检索兜底，继续生成并标注待核对：', searchErr);
+            }
+            send('stage', { stage: 'textbook_search', label: '检索教材内容', status: 'done' });
+          }
+
           const composed = await composeDoc({
             docType,
             promptKey: typeCfg?.promptKey ?? '',
@@ -224,7 +246,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             textbook: body.textbook,
             duration: body.duration,
             difficulty: body.difficulty,
-            textbookContext: body.textbookContext,
+            textbookContext,
           });
           await sb
             .from('generation_jobs')
@@ -763,6 +785,158 @@ function deriveKeywords(model: DocModel, docType: string, body: GenerateBody): s
     if (out.length >= 12) break;
   }
   return out;
+}
+
+/**
+ * 教材检索成本（元/次），仅作后台月度看板参考；精确单价由检索服务商账单为准。
+ */
+const SEARCH_COST_CNY_PER_CALL = 0.01;
+
+/** textbook_versions 行（仅取用字段）。 */
+interface TextbookVersionRow {
+  year?: string | null;
+  version?: string | null;
+  publisher?: string | null;
+  subject?: string | null;
+  grade?: string | null;
+  chapter?: string | null;
+  status?: string | null;
+}
+
+/** 把版本维度拼成可读描述。 */
+function describeVersion(v: TextbookVersionRow | null): string {
+  if (!v) return '';
+  const parts = [v.grade, v.subject, v.publisher, v.version, v.year]
+    .filter((x) => x && String(x).trim().length > 0)
+    .map(String);
+  return parts.length > 0 ? `教材版本：${parts.join(' / ')}` : '';
+}
+
+/** 无检索密钥/检索失败时的兜底上下文（仅版本元信息 + 章节）。 */
+function fallbackContext(v: TextbookVersionRow | null, chapter?: string): string {
+  const meta = describeVersion(v);
+  const lines: string[] = [];
+  if (meta) lines.push(meta);
+  if (chapter && chapter.trim()) lines.push(`本节课章节：${chapter.trim()}`);
+  return lines.join('\n');
+}
+
+/** 拼装联网检索式。 */
+function buildSearchQuery(v: TextbookVersionRow | null, chapter?: string): string {
+  const meta = [v?.subject, v?.grade, v?.publisher, v?.version, v?.year]
+    .filter((x) => x && String(x).trim())
+    .map(String)
+    .join(' ');
+  const focus = chapter && chapter.trim() ? chapter.trim() : (v?.subject ?? '教材');
+  return `${meta} ${focus} 教材内容 知识点 例题`.trim();
+}
+
+/** 教材上下文解析结果。 */
+interface ResolveResult {
+  context: string;
+  searched: boolean;
+}
+
+/**
+ * 解析教材上下文（T07 textbook_search 阶段核心）。
+ *
+ * 命中 `textbook_knowledge` 缓存 → 直接复用（省检索成本）；
+ * 未命中 → 调 SearchAdapter 联网检索，并沉淀为待核对知识；
+ * 任何失败 / 无密钥 → 兜底为仅版本元信息，保证生成不中断。
+ *
+ * @param opts 版本 id / 章节自由文本 / service_role 客户端。
+ */
+async function resolveTextbookContext(opts: {
+  versionId: string;
+  chapter: string | undefined;
+  sb: ReturnType<typeof adminClient>;
+}): Promise<ResolveResult> {
+  const { versionId, chapter, sb } = opts;
+
+  const { data: ver } = await sb
+    .from('textbook_versions')
+    .select('year, version, publisher, subject, grade, chapter, status')
+    .eq('id', versionId)
+    .maybeSingle();
+  const { data: knowledge } = await sb
+    .from('textbook_knowledge')
+    .select('section, content, status')
+    .eq('textbook_version_id', versionId);
+
+  // 命中缓存：直接复用，省检索成本
+  const cached = (knowledge ?? [])
+    .filter((k) => k && k.content)
+    .map((k) => `- ${k.section ?? '知识点'}：${k.content}`);
+  if (cached.length > 0) {
+    const meta = describeVersion(ver as TextbookVersionRow | null);
+    return {
+      context:
+        `${meta}\n\n## 已沉淀教材知识（优先对齐）\n${cached.join('\n')}` +
+        (chapter && chapter.trim() ? `\n\n## 本节课章节\n${chapter.trim()}` : ''),
+      searched: false,
+    };
+  }
+
+  // 未命中：尝试联网检索（无密钥 → 优雅跳过）
+  const adapter = getSearchAdapter();
+  if (!adapter) {
+    return { context: fallbackContext(ver as TextbookVersionRow | null, chapter), searched: false };
+  }
+
+  try {
+    const results = await adapter.search({
+      query: buildSearchQuery(ver as TextbookVersionRow | null, chapter),
+      topK: 5,
+    });
+    if (results.length > 0) {
+      // 沉淀为待教师核对的知识（verified_by 为空 → 仅版本 owner 可读，命中缓存供二次生成复用）
+      await sb.from('textbook_knowledge').insert(
+        results.map((r) => ({
+          textbook_version_id: versionId,
+          section: chapter && chapter.trim() ? chapter.trim().slice(0, 120) : (ver?.subject ?? '教材'),
+          content: `${r.title}\n${r.snippet}\n来源：${r.url}`,
+          status: 'pending',
+          source: 'ai',
+        })),
+      );
+      await recordSearchSpend(sb, adapter.name);
+      const meta = describeVersion(ver as TextbookVersionRow | null);
+      const ctx = results.map((r, i) => `${i + 1}. ${r.title}：${r.snippet}`).join('\n');
+      return {
+        context:
+          `${meta}\n\n## 联网检索到的教材参考（待教师核对）\n${ctx}` +
+          (chapter && chapter.trim() ? `\n\n## 本节课章节\n${chapter.trim()}` : ''),
+        searched: true,
+      };
+    }
+  } catch (e) {
+    console.warn('[textbook_search] 检索失败，兜底为版本元信息：', e);
+  }
+  return { context: fallbackContext(ver as TextbookVersionRow | null, chapter), searched: false };
+}
+
+/**
+ * 把教材检索成本记入 `monthly_spend`（model='web_search'），供后台月度看板。
+ * 失败不影响主流程（仅是成本归因）。
+ */
+async function recordSearchSpend(sb: ReturnType<typeof adminClient>, provider: string): Promise<void> {
+  try {
+    const period = currentPeriod();
+    await sb.from('monthly_spend').upsert(
+      {
+        period,
+        model: 'web_search',
+        provider,
+        calls: 1,
+        tokens_in: 0,
+        tokens_out: 0,
+        cost_cny: SEARCH_COST_CNY_PER_CALL,
+      },
+      { onConflict: 'period' },
+    );
+  } catch (e) {
+    console.warn('[textbook_search] 检索成本记账失败（不影响生成）：', e);
+  }
 }
 
 /**

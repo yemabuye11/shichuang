@@ -86,3 +86,11 @@ export async function versionTag(keys: readonly string[]): Promise<string> {
 export function clearCache(): void {
   cache = null;
 }
+
+/**
+ * 文档类教材感知系统节 key（T07）。
+ *
+ * `composeDoc` 将其拼进 system 段；该模板缺失时自动跳过，不影响生成。
+ * 集中在此避免与 compose.ts 中的字面量散落不一致。
+ */
+export const TEXTBOOK_AWARE_SECTION = 'system_section:textbook_aware';
