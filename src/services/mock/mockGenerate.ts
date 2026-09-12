@@ -177,13 +177,21 @@ async function runMockDoc(
   const { onEvent, isCancelled, persist: onPersist } = handlers;
   const docType = req.docType as DocType;
   const cost = getDocTypeCostSafe(docType);
+  const hasTextbook = !!req.textbookVersionId;
 
-  const stages: { stage: 'understand' | 'design' | 'code' | 'verify'; label: string }[] = [
-    { stage: 'understand', label: '理解教学需求' },
+  const stages: {
+    stage: 'understand' | 'textbook_search' | 'design' | 'code' | 'verify';
+    label: string;
+  }[] = [{ stage: 'understand', label: '理解教学需求' }];
+  // T07：绑定教材版本时插入 textbook_search 阶段（mock 下为检索占位）
+  if (hasTextbook) {
+    stages.push({ stage: 'textbook_search', label: '检索教材内容' });
+  }
+  stages.push(
     { stage: 'design', label: '设计文档结构' },
     { stage: 'code', label: '生成文档内容' },
     { stage: 'verify', label: '自检与优化' },
-  ];
+  );
 
   for (const s of stages) {
     onEvent({ type: 'stage', data: { ...s, status: 'running' } });
@@ -193,7 +201,13 @@ async function runMockDoc(
   }
   onEvent({ type: 'stage', data: { stage: 'verify', label: '自检与优化', status: 'running' } });
 
-  const model = buildSampleDocModel(docType, req.prompt);
+  let model = buildSampleDocModel(docType, req.prompt);
+  // T07：绑定教材版本时，强制在待核对项首位标注「已绑定教材、请教师核对」
+  if (hasTextbook) {
+    const hints = model.verifyHints ? [...model.verifyHints] : [];
+    hints.unshift('已绑定教材版本，本内容为 AI 生成示例，请教师核对教材事实、定义与例题（mock 检索占位）');
+    model = { ...model, verifyHints: hints };
+  }
   const json = JSON.stringify(model, null, 2);
   const html = buildDocPreviewHtml(model);
 

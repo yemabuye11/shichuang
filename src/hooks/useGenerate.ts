@@ -55,13 +55,15 @@ export interface GenerateSnapshot {
   readonly elapsedMs: number;
 }
 
-/** 初始快照。 */
-function initialSnapshot(): GenerateSnapshot {
+/** 初始快照。doc 类生成额外插入 textbook_search 阶段。 */
+function initialSnapshot(req?: GenerateRequest): GenerateSnapshot {
+  const base = GENERATION_STAGES.map((s) => ({ stage: s.stage, label: s.label, status: 'pending' as const }));
+  const stages: StageState[] = req?.category === 'doc' ? insertTextbookStage(base) : base;
   return {
     status: 'idle',
     jobId: '',
     request: null,
-    stages: GENERATION_STAGES.map((s) => ({ stage: s.stage, label: s.label, status: 'pending' as const })),
+    stages,
     code: '',
     chars: 0,
     result: null,
@@ -70,6 +72,18 @@ function initialSnapshot(): GenerateSnapshot {
     startedAt: 0,
     elapsedMs: 0,
   };
+}
+
+/** 在 understand 之后插入 textbook_search 阶段（仅文档类生成）。 */
+function insertTextbookStage(stages: StageState[]): StageState[] {
+  const out: StageState[] = [];
+  for (const s of stages) {
+    out.push(s);
+    if (s.stage === 'understand') {
+      out.push({ stage: 'textbook_search', label: '检索教材内容', status: 'pending' });
+    }
+  }
+  return out;
 }
 
 let snapshot: GenerateSnapshot = initialSnapshot();
@@ -202,7 +216,7 @@ export function startGenerate(req: GenerateRequest): void {
 
   session?.cancel();
   snapshot = {
-    ...initialSnapshot(),
+    ...initialSnapshot(req),
     status: 'checking',
     jobId: req.idempotencyKey,
     request: req,

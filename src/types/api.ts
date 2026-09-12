@@ -45,7 +45,7 @@ export interface GenerateRequest {
 /** SSE `stage` 事件载荷。 */
 export interface StageEvent {
   /** 阶段标识。 */
-  stage: 'understand' | 'design' | 'code' | 'verify';
+  stage: 'understand' | 'textbook_search' | 'design' | 'code' | 'verify';
   /** 阶段中文名。 */
   label: string;
   /** 阶段状态。 */

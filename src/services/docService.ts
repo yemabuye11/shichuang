@@ -1,6 +1,7 @@
 import type { DocModel, DocType } from '@/types/doc';
 import { isMockMode } from '@/config/env';
 import * as mockStore from './mock/mockStore';
+import * as textbookService from './textbookService';
 import type { App } from '@/types/models';
 
 /**
@@ -78,15 +79,36 @@ export async function renderAndPublish(docId: string): Promise<{ renderUrl: stri
 }
 
 /**
- * 沉淀知识点到知识库（T07 能力，本批仅留接口占位）。
+ * 沉淀知识点到教材知识库（T07）。
  *
- * @param docId 文档 UUID。
- * @param model 文档模型。
+ * 取该文档绑定的教材版本，把「待教师核对」项逐条沉淀为同版本可复用知识；
+ * 若无待核对项，则沉淀正文首段作为兜底知识。mock / 真实统一走 `textbookService`。
+ *
+ * @param docId 文档（应用）UUID。
+ * @param model 文档模型（含 verifyHints）。
+ * @returns 沉淀的知识点条数。
  */
-export async function depositKnowledge(docId: string, model: DocModel): Promise<void> {
-  // T07 实现：把文档结构沉淀到教材/知识点库，供后续教材感知生成复用。
-  void docId;
-  void model;
+export async function depositKnowledge(docId: string, model: DocModel): Promise<number> {
+  const app = isMockMode()
+    ? (await mockStore.load()).apps.find((a) => a.id === docId) ?? null
+    : await getRealApp(docId);
+  const versionId = app?.textbookVersionId ?? null;
+  if (!versionId) return 0;
+
+  const hints = model.verifyHints ?? [];
+  if (hints.length === 0) {
+    const section = model.meta?.title ?? '全文';
+    const content = (model.blocks ?? [])
+      .map((b) => b.text ?? '')
+      .join('\n')
+      .slice(0, 2000);
+    await textbookService.depositKnowledge(docId, versionId, section, content);
+    return 1;
+  }
+  for (const h of hints) {
+    await textbookService.depositKnowledge(docId, versionId, model.meta?.title ?? '待核对项', h);
+  }
+  return hints.length;
 }
 
 /** 读取真实模式下的应用行（含 doc_json_url 等）。 */
