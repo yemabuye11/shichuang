@@ -1,0 +1,136 @@
+%% 时序图①：生成应用全链路（预扣 → 流式 → 落盘 → 记账 / 失败退还）
+%% 用法：粘贴到 https://mermaid.live 或任意 Mermaid 渲染器
+
+sequenceDiagram
+    autonumber
+    actor T as 教师
+    participant P as 前端 GeneratePage/useGenerate
+    participant Svc as services/generateService
+    participant EF as EdgeFn generate
+    participant DB as Supabase Postgres
+    participant LLM as 模型适配器 DeepSeek
+    participant Store as ArtifactStore R2或GH-Pages
+    participant CDN as CDN 边缘
+
+    T->>P: 输入需求 + 选类型「教学游戏」+ 点生成
+    P->>DB: rpc estimate_cost(type, model)
+    DB-->>P: 3 积分（生成前透明 P0-F2）
+    P->>DB: rpc check_generation_allowed()
+    alt 余额不足 / 超日限 / 超月阀
+        DB-->>P: allowed=false code=INSUFFICIENT_CREDITS
+        P-->>T: 阻断并引导：兑换码 / 联系管理员（P0-F4）
+    end
+    P->>Svc: startGenerate(payload, idempotencyKey)
+    Svc->>EF: POST /generate (Bearer JWT, Accept text/event-stream)
+
+    EF->>EF: 校验 JWT + zod schema
+    EF->>DB: rpc check_generation_allowed()
+    EF->>DB: rpc reserve_credits(3, jobId) SELECT FOR UPDATE 行锁
+    DB-->>EF: ok=true balance=84
+    Note over DB: 唯一索引 ref_id 保证幂等，重复提交不二次扣
+
+    EF->>DB: insert generation_jobs(running) + apps(draft, html_status=pending)
+    EF->>DB: 读取 prompt_templates（system 分节 + 游戏子模板）内存缓存 60s
+    EF->>EF: compose 固定前缀逐字节稳定 → 命中上下文缓存
+    EF->>LLM: POST /chat/completions stream=true
+
+    loop 流式返回
+        LLM-->>EF: chunk
+        EF-->>Svc: event delta text
+        Svc-->>P: 增量写入状态
+        P-->>T: 代码实时滚动 + 阶段进度（UI-3）
+    end
+
+    LLM-->>EF: DONE + usage tokensIn=3210 tokensOut=5402
+    EF->>EF: validateHtml(html)
+    alt 校验失败
+        EF->>LLM: 携带错误信息重试 1 次
+        LLM-->>EF: 新输出
+        EF->>EF: 再次校验
+        alt 仍失败
+            EF->>DB: rpc refund_generation(jobId, VALIDATE_FAILED)
+            DB-->>EF: refunded=true balance=87
+            EF-->>Svc: event error code=VALIDATE_FAILED refunded=true
+            Svc-->>T: 这次没生成成功，已退还 3 积分 + 重试 + 换个说法
+        end
+    end
+
+    EF->>Store: putAppHtml(appId, v1, html)
+    Store-->>EF: url sizeBytes sha256
+    EF->>DB: 写影子副本（supabase_storage，仅回源用）
+    EF->>Store: warmup(url) HEAD 触发回源
+    Store->>CDN: 回源并缓存 Cache-Control immutable
+    EF->>DB: update apps set html_url html_status=ready tokens size sha256
+    EF->>DB: rpc settle_generation(jobId, tokens, cost, appId, ms)
+    DB->>DB: 累加 monthly_spend（月度支出阀数据源）
+    EF-->>Svc: event done appId html htmlUrl creditsCost=3 balance=84
+
+    Svc->>Svc: artifactService.saveLocal(appId, html) → IndexedDB
+    Svc-->>P: 完成
+    P-->>T: 结果页（Blob URL 立即预览，0 延迟）
+    Note over P,CDN: 若 htmlStatus=pending（GH-Pages 延迟）<br/>前端 2s 轮询最多 60s，ready 后放开「发布/分享」
+
+
+%% ────────────────────────────────────────────────────────────────
+%% 时序图②：访客打开应用运行页（CDN 分发 + 浏览计数）
+
+sequenceDiagram
+    autonumber
+    actor V as 学生/家长/同行（可能未登录）
+    participant R as AppRunPage (/app/:id)
+    participant IDB as IndexedDB 本地副本
+    participant DB as Supabase Postgres
+    participant EF as EdgeFn serve-app
+    participant CDN as CDN 边缘节点
+    participant Origin as 静态源站 R2或GH-Pages
+
+    V->>R: 打开 /app/8a3f…（公开路由，无需登录 P0-A3）
+    R->>DB: select apps(id)（anon key，RLS 仅放行 status=published）
+    alt 404 或 taken_down
+        DB-->>R: 无数据
+        R-->>V: 该应用已下架或不存在 + 回广场
+    end
+
+    par 页面元数据
+        R->>DB: select 作者（视图 public_authors：仅 id/nickname/avatar_seed）
+        DB-->>R: 王老师
+    and 浏览计数（不阻塞渲染）
+        R->>EF: navigator.sendBeacon POST /track-view appId
+        EF->>EF: sha256(ip|ua|appId|SALT) → viewer_hash
+        EF->>DB: rpc record_app_view(appId, viewer_hash, today)
+        DB->>DB: insert on conflict do nothing UNIQUE(app_id,viewer_hash,view_date)
+        DB-->>EF: counted=true → apps.view_count + 1
+    end
+
+    R->>IDB: get(appId)
+    alt 本地有副本且 sha256 匹配（同设备刚生成）
+        IDB-->>R: html
+        R->>R: URL.createObjectURL(Blob) → iframe.src
+        R-->>V: 0 延迟渲染
+    else 无本地副本
+        R->>CDN: GET html_url（/a/2026/08/id/v1.html）
+        alt CDN 命中（绝大多数情况，Supabase 出网 0）
+            CDN-->>R: html
+        else CDN MISS
+            CDN->>Origin: 回源
+            Origin-->>CDN: html
+            CDN-->>R: html + 写入边缘缓存
+        else 404（GH-Pages 尚未发布，≤10 分钟窗口）
+            R->>EF: GET /serve-app?id=id
+            alt 回源配额未超（500/日）
+                EF->>Origin: 读影子副本（supabase_storage）
+                EF-->>R: 200 html + Cache-Control max-age=300
+            else 配额已超
+                EF-->>R: 429 → 内容正在发布，请稍后刷新
+            end
+        end
+        R->>R: iframe.src = URL 或 Blob URL
+    end
+
+    R-->>V: iframe sandbox=allow-scripts allow-forms allow-popups（绝不授予 allow-same-origin）
+    R-->>V: 底栏：复制链接 / 二维码 / 全屏上课 / 点赞
+    R-->>V: 本内容由 AI 生成，请教师审核后使用 + 举报（P0-D7）
+    R-->>V: 增长条：王老师 用【平台名】制作 + 免费做一个同款
+    V->>R: 点「免费做一个同款」
+    R->>R: 未登录 → /login?redirect=/generate?remix=appId&prompt=原始提示词
+    Note over R: remix 预填提示词 = 核心传播引擎（P0-C5）

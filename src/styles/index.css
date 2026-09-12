@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   基础重置与中文字体栈
+   说明：Tailwind preflight 已在 tailwind.config.ts 中关闭，
+   这里只做最小必要的补充，避免与 MUI/Emotion 冲突。
+--------------------------------------------------------------------------- */
+
+:root {
+  --brand-primary: #2f6bff;
+  --brand-secondary: #7a5cff;
+  --bg-default: #f7f8fa;
+  --text-primary: #1b1f27;
+  --text-secondary: #6b7280;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --top-nav-height: 56px;
+  --tab-bar-height: 60px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-size: 16px;
+  color: var(--text-primary);
+  background-color: var(--bg-default);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  /* 移动端优先：禁止横向滚动 */
+  overflow-x: hidden;
+  min-height: 100dvh;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* 中文字体下的标点与换行优化 */
+p,
+li,
+h1,
+h2,
+h3,
+h4 {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* 表单元素继承字体，避免 iOS 默认 11px 导致自动缩放 */
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* iOS 输入框自动缩放修复：字号必须 ≥16px */
+@supports (-webkit-touch-callout: none) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* 隐藏滚动条但保留滚动（横向 chips 列表） */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* 安全区适配（底部 TabBar） */
+.pb-safe {
+  padding-bottom: calc(8px + var(--safe-bottom));
+}
+
+/* 代码流式区域等宽字体 */
+.code-font {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* 骨架屏微光动画 */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #eef0f4 25%, #f7f8fa 37%, #eef0f4 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+
+/* 尊重「减少动效」系统设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

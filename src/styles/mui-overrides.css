@@ -1,0 +1,56 @@
+/* ---------------------------------------------------------------------------
+   MUI 组件补充样式
+   仅放置「无法用 theme.ts 的 styleOverrides 表达」的规则
+   （如伪元素、跨组件组合、全局字体族兜底）。
+--------------------------------------------------------------------------- */
+
+/* 全局：MUI 组件继承中文优先字体栈 */
+.MuiTypography-root,
+.MuiButton-root,
+.MuiChip-root,
+.MuiInputBase-root,
+.MuiMenuItem-root,
+.MuiTab-root,
+.MuiAlert-root {
+  font-family: inherit;
+}
+
+/* 移动端：底部 TabBar 区域留白，避免内容被遮挡 */
+@media (max-width: 599px) {
+  .has-tabbar {
+    padding-bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + 8px);
+  }
+}
+
+/* 输入框：聚焦时主色描边（对比度 ≥ 4.5:1） */
+.MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-width: 2px;
+}
+
+/* 对话框在小屏下贴底展示，接近原生 ActionSheet 手感 */
+@media (max-width: 599px) {
+  .MuiDialog-paper {
+    margin: 16px 12px;
+    max-height: calc(100dvh - 32px);
+  }
+}
+
+/* 表格/列表分割线统一为浅灰 */
+.MuiDivider-root {
+  border-color: rgba(27, 31, 39, 0.08);
+}
+
+/* 提示气泡最大宽度，避免小屏溢出 */
+.MuiTooltip-tooltip {
+  max-width: 260px;
+  font-size: 13px;
+}
+
+/* 生成中的代码流式区域：等宽 + 不换行滚动 */
+.code-stream pre {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

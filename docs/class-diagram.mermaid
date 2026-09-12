@@ -1,0 +1,231 @@
+%% 类图：前端 service 层 + Edge Function 适配器层 + 领域实体
+%% 用法：粘贴到 https://mermaid.live 或任意 Mermaid 渲染器
+
+classDiagram
+    direction LR
+
+    class AuthService {
+        -providers: Map
+        +getEnabledProviders() AuthProvider[]
+        +signIn(id, payload) AuthResult
+        +signUp(id, payload) AuthResult
+        +signOut() void
+        +getSession() Session
+    }
+    class AuthProvider {
+        <<interface>>
+        +id: string
+        +label: string
+        +enabled: boolean
+        +signIn(payload) AuthResult
+        +signUp(payload) AuthResult
+    }
+    class PasswordProvider
+    class InviteCodeProvider
+    class PhoneProvider {
+        <<预留 P1 需短信资质>>
+    }
+    class WechatProvider {
+        <<预留 P1 需企业主体>>
+    }
+
+    class SystemConfigService {
+        -cache: Map
+        +getPublicConfig() PublicConfig
+        +get(key) unknown
+    }
+    class CreditService {
+        +getBalance() CreditAccount
+        +listLedger(offset, limit) LedgerItem[]
+        +estimateCost(appType, model) number
+        +redeem(code) RedeemResult
+    }
+    class AppService {
+        +createDraft(draft) App
+        +listMine(filter) App[]
+        +publish(appId, meta) PublishResult
+        +unpublish(appId) void
+        +rename(appId, title) void
+        +duplicate(appId) App
+        +remove(appId) void
+    }
+    class SquareService {
+        +list(query) AppPage
+        +toggleLike(appId) LikeResult
+        +report(appId, reason) void
+    }
+    class GenerateService {
+        +start(req, onEvent) void
+        +cancel() void
+        -parseSSE(stream) GenEvent
+    }
+    class ArtifactService {
+        +saveLocal(appId, html) void
+        +getLocalBlobUrl(appId, sha256) string
+        +resolvePlayableUrl(app) string
+        +waitUntilReady(appId, timeoutMs) boolean
+    }
+    class AdminService {
+        +createCodes(credits, count, batchNo) string[]
+        +takedown(appId, reason) void
+        +stats() AdminStats
+    }
+    class TrackService {
+        +trackView(appId) void
+        +track(name, props) void
+    }
+
+    class App {
+        +id: uuid
+        +authorId: uuid
+        +title: string
+        +appType: AppType
+        +htmlUrl: string
+        +htmlStatus: HtmlStatus
+        +status: AppStatus
+        +viewCount: number
+        +likeCount: number
+        +creditsCost: number
+        +createdAt: datetime
+    }
+    class CreditAccount {
+        +userId: uuid
+        +balance: number
+        +totalEarned: number
+        +totalUsed: number
+    }
+    class LedgerItem {
+        +id: bigint
+        +delta: number
+        +balanceAfter: number
+        +reason: LedgerReason
+        +tokensIn: number
+        +tokensOut: number
+        +costCny: number
+    }
+    class GenerationJob {
+        +id: uuid
+        +status: JobStatus
+        +reservedCredits: number
+        +promptVersion: string
+    }
+    class RedeemCode {
+        +code: string
+        +credits: number
+        +status: string
+        +usedBy: uuid
+    }
+    class AppType {
+        <<enumeration>>
+        auto
+        teaching_animation
+        edu_tool
+        teaching_game
+        interactive_courseware
+        data_collection
+        ai_item_generation
+        ai_paper_composition
+        ai_lesson_plan
+    }
+    class HtmlStatus {
+        <<enumeration>>
+        pending
+        ready
+        failed
+    }
+    class AppStatus {
+        <<enumeration>>
+        draft
+        published
+        taken_down
+    }
+
+    class LlmAdapter {
+        <<interface>>
+        +provider: string
+        +buildRequest(req) HttpRequest
+        +parseChunk(raw) Chunk
+        +computeCost(usage, pricing, at) number
+    }
+    class DeepSeekAdapter
+    class QwenAdapter {
+        <<stub 预留>>
+    }
+    class GlmAdapter {
+        <<stub 预留>>
+    }
+    class DoubaoAdapter {
+        <<stub 预留>>
+    }
+    class ModelProfile {
+        +id: string
+        +provider: string
+        +modelId: string
+        +pricing: jsonb
+        +maxOutputTokens: number
+        +isDefault: boolean
+    }
+
+    class PromptComposer {
+        +loadSystemCore() string
+        +compose(appType, fields) Composed
+        +repairPrompt(errors) string
+    }
+    class PromptTemplate {
+        +id: uuid
+        +kind: string
+        +key: string
+        +version: number
+        +content: string
+        +isActive: boolean
+    }
+    class HtmlValidator {
+        +validate(html) ValidationResult
+    }
+    class CostCalculator {
+        +compute(usage, pricing, at) number
+        +accumulateMonthly(period, model, cost) void
+    }
+
+    class ArtifactStore {
+        <<interface>>
+        +name: string
+        +putAppHtml(appId, version, html) PutResult
+        +getAppHtml(appId, version) string
+        +warmup(url) void
+    }
+    class R2Store
+    class GitHubPagesStore
+    class SupabaseStorageStore
+
+    AuthService o-- AuthProvider
+    AuthProvider <|.. PasswordProvider
+    AuthProvider <|.. InviteCodeProvider
+    AuthProvider <|.. PhoneProvider
+    AuthProvider <|.. WechatProvider
+
+    LlmAdapter <|.. DeepSeekAdapter
+    LlmAdapter <|.. QwenAdapter
+    LlmAdapter <|.. GlmAdapter
+    LlmAdapter <|.. DoubaoAdapter
+    ArtifactStore <|.. R2Store
+    ArtifactStore <|.. GitHubPagesStore
+    ArtifactStore <|.. SupabaseStorageStore
+
+    GenerateService ..> ArtifactService : 使用
+    GenerateService ..> LlmAdapter : 经 Edge Function
+    PromptComposer ..> PromptTemplate : 读取
+    DeepSeekAdapter ..> ModelProfile : 读定价
+    CostCalculator ..> ModelProfile : 读定价
+
+    AppService ..> App : 操作
+    SquareService ..> App : 查询
+    CreditService ..> CreditAccount : 查询
+    CreditService ..> LedgerItem : 查询
+    CreditService ..> RedeemCode : 兑换
+    AdminService ..> RedeemCode : 批量生成
+    App "1" --> "1" AppType : 分类
+    App "1" --> "1" HtmlStatus : 产物状态
+    App "1" --> "1" AppStatus : 发布状态
+    GenerationJob "1" --> "0..1" App : 产出
+    App "1" --> "0..1" App : remix 自

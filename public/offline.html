@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#2F6BFF" />
+    <title>当前没有网络</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #f7f8fa;
+        color: #1b1f27;
+        font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
+          'Source Han Sans SC', system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1.7;
+        text-align: center;
+      }
+      .card {
+        max-width: 420px;
+        padding: 32px 24px;
+        border-radius: 16px;
+        background: #fff;
+        box-shadow: 0 2px 12px rgba(27, 31, 39, 0.06);
+      }
+      .icon { font-size: 48px; line-height: 1; margin-bottom: 12px; }
+      h1 { margin: 0 0 8px; font-size: 20px; }
+      p { margin: 0 0 16px; color: #6b7280; font-size: 15px; }
+      button {
+        min-height: 48px;
+        padding: 0 24px;
+        border: 0;
+        border-radius: 12px;
+        background: #2f6bff;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:active { background: #1f52db; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="icon" aria-hidden="true">📡</div>
+      <h1>当前没有网络</h1>
+      <p>
+        已打开的页面仍可继续使用；生成新应用需要联网。
+        <br />
+        联网后点下面的按钮即可重新进入。
+      </p>
+      <button type="button" onclick="location.reload()">重新加载</button>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,33 @@
+name: keepalive
+
+# Supabase 免费层「连续 1 周无访问自动暂停」的兜底（ARCHITECTURE.md §1.1 D9）。
+# 每 3 天 ping 一次公开的 RPC 端点，零成本，避免假期后打不开。
+#
+# 需要在仓库 Settings → Secrets 配置：
+#   SUPABASE_URL        https://xxxxx.supabase.co
+#   SUPABASE_ANON_KEY   anon public key
+
+on:
+  schedule:
+    # 每 3 天 02:00（UTC）≈ 北京时间 10:00
+    - cron: '0 2 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 唤醒 Supabase
+        run: |
+          code=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/rpc/get_public_config" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Supabase 健康检查失败（$code）"
+            exit 1
+          fi
+          head -c 200 /tmp/resp.json

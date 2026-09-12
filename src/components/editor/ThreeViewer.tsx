@@ -1,0 +1,415 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Button, FormControlLabel, Stack, Switch, Typography } from '@mui/material';
+import LayersIcon from '@mui/icons-material/Layers';
+import LabelIcon from '@mui/icons-material/Label';
+import type { SceneDescriptor } from '@/types/doc';
+
+/**
+ * 3D 课件查看器（courseware_3d）。
+ *
+ * 硬性约束（ARCHITECTURE.md §C.1 / T06 红线）：
+ * - `three` **必须动态 import**，不进入主包（版本锁定 Vite5/React18，懒加载保证首屏体积）；
+ * - 移动端降低多边形与像素比；
+ * - 支持：旋转（OrbitControls）/ 拆解（explode）/ 标注（annotations 投影到屏幕）。
+ *
+ * 本组件只负责「渲染一个 SceneDescriptor」，不关心来源（AI 生成 or 预置）。
+ */
+export interface ThreeViewerProps {
+  /** 结构化 3D 场景描述。 */
+  scene: SceneDescriptor;
+  /** 画布高度（像素或 CSS 字符串）。 */
+  height?: number | string;
+}
+
+/** 可拆解的部件。 */
+interface Part {
+  /** 物体（Mesh / Group）。 */
+  obj: import('three').Object3D;
+  /** 原始位置。 */
+  base: import('three').Vector3;
+  /** 拆解方向（单位向量）。 */
+  dir: import('three').Vector3;
+  /** 标注文字（可选）。 */
+  name?: string;
+}
+
+/** 把场景描述构建为 three 部件集合。 */
+function buildParts(
+  THREE: typeof import('three'),
+  desc: SceneDescriptor,
+  isMobile: boolean,
+): { group: import('three').Group; parts: Part[] } {
+  const seg = isMobile ? 18 : 48;
+  const group = new THREE.Group();
+  const parts: Part[] = [];
+
+  const mat = (color: number): import('three').Material =>
+    new THREE.MeshStandardMaterial({ color, metalness: 0.1, roughness: 0.65 });
+
+  const addPart = (
+    obj: import('three').Object3D,
+    dir: [number, number, number],
+    name?: string,
+  ): void => {
+    obj.userData.base = obj.position.clone();
+    parts.push({ obj, base: obj.position.clone(), dir: new THREE.Vector3(...dir).normalize(), name });
+    group.add(obj);
+  };
+
+  const params = desc.params as Record<string, unknown>;
+  const shape = String(params.shape ?? 'box');
+
+  switch (desc.type) {
+    case 'geometry': {
+      let geo: import('three').BufferGeometry;
+      switch (shape) {
+        case 'sphere':
+          geo = new THREE.SphereGeometry(1, seg, seg);
+          break;
+        case 'cylinder':
+          geo = new THREE.CylinderGeometry(0.8, 0.8, 1.6, seg);
+          break;
+        case 'cone':
+          geo = new THREE.ConeGeometry(1, 1.8, seg);
+          break;
+        case 'pyramid':
+          geo = new THREE.ConeGeometry(1.1, 1.6, 4);
+          break;
+        case 'box':
+        default:
+          geo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
+          break;
+      }
+      const solid = new THREE.Mesh(geo, mat(0x4f7cff));
+      addPart(solid, [0, 0, 0]);
+
+      // 可拆解：叠加一个半透明「截面」部件，向上分离以观察内部
+      if (desc.explodable) {
+        const section = new THREE.Mesh(
+          new THREE.BoxGeometry(1.7, 0.12, 1.7),
+          new THREE.MeshStandardMaterial({ color: 0xff7a59, transparent: true, opacity: 0.85 }),
+        );
+        section.position.set(0, 0, 0);
+        addPart(section, [0, 1, 0]);
+      }
+      break;
+    }
+
+    case 'molecule': {
+      // 原子配色
+      const palette: Record<string, number> = {
+        O: 0xff4d4f,
+        H: 0xf5f5f5,
+        C: 0x333333,
+        N: 0x5b8def,
+        default: 0x9c6ade,
+      };
+      const atoms = Array.isArray(params.atoms) ? (params.atoms as Array<Record<string, unknown>>) : [];
+      const list =
+        atoms.length > 0
+          ? atoms
+          : // 默认水：O + 2H
+            [
+              { element: 'O', position: [0, 0, 0] },
+              { element: 'H', position: [0.6, 0.5, 0] },
+              { element: 'H', position: [-0.6, 0.5, 0] },
+            ];
+      for (const a of list) {
+        const element = String(a.element ?? 'default');
+        const [x, y, z] = (a.position as number[]) ?? [0, 0, 0];
+        const radius = element === 'H' ? 0.32 : element === 'O' ? 0.5 : 0.45;
+        const atom = new THREE.Mesh(new THREE.SphereGeometry(radius, seg, seg), mat(palette[element] ?? palette.default));
+        atom.position.set(x, y, z);
+        addPart(atom, [x, y, z], element);
+      }
+      break;
+    }
+
+    case 'globe': {
+      const earth = new THREE.Mesh(
+        new THREE.SphereGeometry(1.2, seg, seg),
+        new THREE.MeshStandardMaterial({ color: 0x2b6cb0, metalness: 0.1, roughness: 0.8 }),
+      );
+      addPart(earth, [0, 0, 0], '地球');
+
+      // 经纬网：用线框环作为可拆解部件
+      const rings = 4;
+      for (let i = 1; i <= rings; i++) {
+        const r = 1.25;
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(r, 0.012, 8, seg),
+          new THREE.MeshBasicMaterial({ color: 0xf6c453 }),
+        );
+        ring.rotation.x = (Math.PI / (rings + 1)) * i;
+        addPart(ring, [0, (i - rings / 2) * 0.4, 0]);
+      }
+      break;
+    }
+
+    case 'function': {
+      // y = sin(x)*cos(z) 参数曲面
+      const size = 3;
+      const g = new THREE.PlaneGeometry(size, size, isMobile ? 24 : 64, isMobile ? 24 : 64);
+      g.rotateX(-Math.PI / 2);
+      const pos = g.attributes.position as import('three').BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const z = pos.getZ(i);
+        const y = Math.sin(x * 1.3) * Math.cos(z * 1.3) * 0.6;
+        pos.setY(i, y);
+      }
+      g.computeVertexNormals();
+      const surface = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x16a34a, side: 2, flatShading: false }));
+      addPart(surface, [0, 0, 0], 'y=sin(x)cos(z)');
+      break;
+    }
+
+    default: {
+      // 通用装配体：中心块 + 数个环绕部件（custom / biology / physics / circuit / 其它）
+      const core = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), mat(0x4f7cff));
+      addPart(core, [0, 0, 0], '主体');
+      const satellites = Array.isArray(params.satellites)
+        ? (params.satellites as number[])
+        : [1, 2, 3, 4];
+      satellites.slice(0, 6).forEach((_, idx) => {
+        const angle = (idx / Math.max(1, satellites.length)) * Math.PI * 2;
+        const sat = new THREE.Mesh(new THREE.SphereGeometry(0.4, seg, seg), mat(0xff7a59));
+        sat.position.set(Math.cos(angle) * 1.8, 0, Math.sin(angle) * 1.8);
+        addPart(sat, [Math.cos(angle), 0, Math.sin(angle)], `部件${idx + 1}`);
+      });
+      break;
+    }
+  }
+
+  group.userData.parts = parts;
+  return { group, parts };
+}
+
+export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Element {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [exploded, setExploded] = useState(false);
+  const [annotationsVisible, setAnnotationsVisible] = useState(true);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 动画循环里读取最新开关值（避免重建场景）
+  const explodedRef = useRef(exploded);
+  const annotationsRef = useRef(annotationsVisible);
+  explodedRef.current = exploded;
+  annotationsRef.current = annotationsVisible;
+
+  const heightNum = useMemo(() => (typeof height === 'number' ? height : 420), [height]);
+
+  useEffect(() => {
+    let disposed = false;
+    let cleanup = (): void => {};
+
+    void (async () => {
+      try {
+        const THREE = await import('three');
+        const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js');
+        if (disposed) return;
+
+        const mount = mountRef.current;
+        if (!mount) return;
+        const width = mount.clientWidth || 480;
+        const isMobile = width < 640;
+        const pixelRatio = Math.min(isMobile ? 1 : 2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+
+        const sceneObj = new THREE.Scene();
+        sceneObj.background = new THREE.Color('#f7f9fc');
+
+        const camera = new THREE.PerspectiveCamera(45, width / heightNum, 0.1, 1000);
+        camera.position.set(0, 1.8, 6);
+
+        const { group, parts } = buildParts(THREE, scene, isMobile);
+        sceneObj.add(group);
+
+        sceneObj.add(new THREE.AmbientLight(0xffffff, 0.9));
+        const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+        dir.position.set(4, 6, 5);
+        sceneObj.add(dir);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: !isMobile });
+        renderer.setPixelRatio(pixelRatio);
+        renderer.setSize(width, heightNum);
+        mount.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 1.2;
+        controls.target.set(0, 0, 0);
+
+        // ---- 标注层（投影到屏幕）----
+        const labelsLayer = document.createElement('div');
+        labelsLayer.style.position = 'absolute';
+        labelsLayer.style.inset = '0';
+        labelsLayer.style.pointerEvents = 'none';
+        labelsLayer.style.overflow = 'hidden';
+        mount.appendChild(labelsLayer);
+
+        const labels: { span: HTMLSpanElement; anchor: import('three').Vector3 }[] = [];
+        for (const p of parts) {
+          if (!p.name) continue;
+          const span = document.createElement('span');
+          span.textContent = p.name;
+          span.style.position = 'absolute';
+          span.style.transform = 'translate(-50%, -50%)';
+          span.style.padding = '1px 7px';
+          span.style.borderRadius = '999px';
+          span.style.fontSize = '12px';
+          span.style.fontWeight = '700';
+          span.style.color = '#1b1f27';
+          span.style.background = 'rgba(255,255,255,0.85)';
+          span.style.border = '1px solid rgba(27,31,39,0.12)';
+          span.style.whiteSpace = 'nowrap';
+          labelsLayer.appendChild(span);
+          labels.push({ span, anchor: p.base.clone() });
+        }
+
+        const tmp = new THREE.Vector3();
+        const updateLabels = (): void => {
+          const visible = annotationsRef.current;
+          labelsLayer.style.display = visible ? 'block' : 'none';
+          if (!visible) return;
+          for (const { span, anchor } of labels) {
+            tmp.copy(anchor).project(camera);
+            const behind = tmp.z > 1;
+            if (behind) {
+              span.style.display = 'none';
+              continue;
+            }
+            span.style.display = 'block';
+            const x = (tmp.x * 0.5 + 0.5) * width;
+            const y = (-tmp.y * 0.5 + 0.5) * heightNum;
+            span.style.left = `${x}px`;
+            span.style.top = `${y}px`;
+          }
+        };
+
+        const applyExplode = (factor: number): void => {
+          for (const p of parts) {
+            p.obj.position.copy(p.base).addScaledVector(p.dir, factor);
+          }
+        };
+
+        let raf = 0;
+        const animate = (): void => {
+          raf = requestAnimationFrame(animate);
+          controls.update();
+          applyExplode(explodedRef.current ? 1.1 : 0);
+          updateLabels();
+          renderer.render(sceneObj, camera);
+        };
+        animate();
+        setReady(true);
+
+        const onResize = (): void => {
+          const w = mount.clientWidth || 480;
+          camera.aspect = w / heightNum;
+          camera.updateProjectionMatrix();
+          renderer.setSize(w, heightNum);
+        };
+        window.addEventListener('resize', onResize);
+
+        cleanup = () => {
+          cancelAnimationFrame(raf);
+          window.removeEventListener('resize', onResize);
+          controls.dispose();
+          renderer.dispose();
+          if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+          if (labelsLayer.parentNode === mount) mount.removeChild(labelsLayer);
+        };
+      } catch (e) {
+        if (!disposed) setError(e instanceof Error ? e.message : '3D 渲染初始化失败');
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      cleanup();
+    };
+    // 仅在场景描述或尺寸变化时重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, heightNum]);
+
+  return (
+    <Box>
+      <Box
+        ref={mountRef}
+        sx={{
+          position: 'relative',
+          width: '100%',
+          height: heightNum,
+          borderRadius: 3,
+          overflow: 'hidden',
+          border: '1px solid',
+          borderColor: 'divider',
+          bgcolor: '#f7f9fc',
+        }}
+      >
+        {!ready && !error ? (
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'text.secondary',
+              fontSize: 14,
+            }}
+          >
+            正在加载 3D 模型…
+          </Box>
+        ) : null}
+        {error ? (
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'error.main',
+              fontSize: 13,
+              px: 2,
+              textAlign: 'center',
+            }}
+          >
+            {error}（可改用「课件 2D」或「教案」形式）
+          </Box>
+        ) : null}
+      </Box>
+
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1, flexWrap: 'wrap', gap: 1 }}>
+        <FormControlLabel
+          control={<Switch size="small" checked={exploded} onChange={(e) => setExploded(e.target.checked)} />}
+          label={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <LayersIcon sx={{ fontSize: 16 }} aria-hidden="true" />
+              <Typography sx={{ fontSize: 13 }}>拆解</Typography>
+            </Box>
+          }
+        />
+        <FormControlLabel
+          control={
+            <Switch size="small" checked={annotationsVisible} onChange={(e) => setAnnotationsVisible(e.target.checked)} />
+          }
+          label={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <LabelIcon sx={{ fontSize: 16 }} aria-hidden="true" />
+              <Typography sx={{ fontSize: 13 }}>标注</Typography>
+            </Box>
+          }
+        />
+        <Typography sx={{ fontSize: 12, color: 'text.disabled', ml: 'auto' }}>
+          拖拽旋转 · 滚轮缩放
+        </Typography>
+      </Stack>
+    </Box>
+  );
+}
+
+export default ThreeViewer;

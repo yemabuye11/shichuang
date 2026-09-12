@@ -1,0 +1,77 @@
+/**
+ * 路由路径常量（ARCHITECTURE.md §8.2）。
+ *
+ * 目的：避免路由字符串散落在各处，改名只改这里。
+ */
+
+/** 应用内的所有路由路径。 */
+export const ROUTES = {
+  /** 首页（公开）。 */
+  HOME: '/',
+  /** 生成页（需登录，支持 `?remix=&prompt=` 预填）。 */
+  GENERATE: '/generate',
+  /** 生成中进度页（需登录）。 */
+  GENERATING: '/generating',
+  /** 应用运行页（公开，P0-A3 硬性）。 */
+  APP_RUN: '/app',
+  /** 应用广场（公开）。 */
+  SQUARE: '/square',
+  /** 个人中心（需登录）。 */
+  ME: '/me',
+  /** 我的应用（需登录）。 */
+  MY_APPS: '/me/apps',
+  /** 登录页（公开，支持 `?redirect=`）。 */
+  LOGIN: '/login',
+  /** 管理员后台（需登录 + role='admin'）。 */
+  ADMIN: '/admin',
+  /** 文档运行页（公开，对应 apps.category='doc' 的网页链接）。 */
+  DOC_RUN: '/d',
+} as const;
+
+/**
+ * 拼接应用运行页路径。
+ *
+ * @param appId 应用 UUID。
+ */
+export function appRunPath(appId: string): string {
+  return `${ROUTES.APP_RUN}/${encodeURIComponent(appId)}`;
+}
+
+/**
+ * 拼接生成中页路径。
+ *
+ * @param jobId 生成任务 UUID。
+ */
+export function generatingPath(jobId: string): string {
+  return `${ROUTES.GENERATING}/${encodeURIComponent(jobId)}`;
+}
+
+/**
+ * 拼接带 redirect 的登录页路径。
+ *
+ * @param redirect 登录成功后要回跳的目标路径。
+ */
+export function loginPath(redirect?: string): string {
+  if (!redirect) return ROUTES.LOGIN;
+  return `${ROUTES.LOGIN}?redirect=${encodeURIComponent(redirect)}`;
+}
+
+/**
+ * 拼接带 remix 预填的生成页路径。
+ *
+ * @param remixAppId 被复刻的应用 ID。
+ * @param prompt 预填的提示词。
+ */
+export function remixPath(remixAppId: string, prompt: string): string {
+  const params = new URLSearchParams({ remix: remixAppId, prompt });
+  return `${ROUTES.GENERATE}?${params.toString()}`;
+}
+
+/**
+ * 拼接文档运行页路径（公开，未登录可访问）。
+ *
+ * @param docId 文档（应用）UUID。
+ */
+export function docRunPath(docId: string): string {
+  return `${ROUTES.DOC_RUN}/${encodeURIComponent(docId)}`;
+}

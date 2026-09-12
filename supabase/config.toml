@@ -1,0 +1,82 @@
+# Supabase 本地配置
+# 参考：https://supabase.com/docs/guides/cli/config
+# 说明：本文件只用于 `supabase start` / `supabase functions serve` 的本地开发。
+#      生产部署走 `supabase db push` + `supabase functions deploy`。
+
+project_id = "shichuang"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+[inbucket]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["https://localhost:5173"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+# P0 不做强制邮箱验证：靠邀请码防薅（见 0002 的 handle_new_user 触发器）
+enable_confirmations = false
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+
+[auth.sms]
+enable_signup = false
+# 手机号登录 P0 不启用（需企业主体 + 签名报备），预留接口
+enable_confirmations = false
+
+[auth.external.wechat]
+enabled = false
+
+[analytics]
+enabled = false
+
+# ---------------------------------------------------------------------------
+# Edge Functions
+# 三个函数：generate（SSE 生成）/ serve-app（回源兜底）/ track-view（浏览计数）
+# 密钥一律走 `supabase secrets set`，不要写进本文件。
+# ---------------------------------------------------------------------------
+[functions.generate]
+verify_jwt = true
+entrypoint = "./functions/generate/index.ts"
+
+[functions.serve-app]
+verify_jwt = false
+entrypoint = "./functions/serve-app/index.ts"
+
+[functions.track-view]
+verify_jwt = false
+entrypoint = "./functions/track-view/index.ts"

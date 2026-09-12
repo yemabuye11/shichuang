@@ -1,0 +1,797 @@
+/**
+ * EF-1 `POST /functions/v1/generate` —— 生成应用 / 文档（SSE 流式）。
+ *
+ * 服务端流程（ARCHITECTURE.md §3.4，顺序不可颠倒）：
+ * 1. 校验 JWT → 校验入参 → `check_generation_allowed()`（日限/并发/月度阀）
+ * 2. 读 `app_type_profiles` 取 `credit_cost` → `reserve_credits()`（**先扣**）
+ * 3. 创建 `generation_jobs(running)` + `apps(draft)`
+ * 4. 拼装提示词 → 调模型（SSE 透传 `delta`）
+ * 5. 校验产物；失败 → 携带错误信息重试 1 次
+ * 6. 仍失败 → `refund_generation()` → 发 `error` 事件 → 结束
+ * 7. 成功 → 写产物 → 预热 → 写影子副本 → 更新 `apps` → `settle_generation()` → 发 `done`
+ *
+ * T06 扩展：入参新增 `category`（默认 'app'）；当 `category='doc'` 时走文档分支——
+ * 期望模型输出 DocModel JSON（而非 HTML），经 `validateDoc` 校验后：
+ *   - 结构化 JSON 存 Storage（`doc_json_url`，守 500MB 红线）；
+ *   - 经 `renderDoc` 渲染为自包含 Web HTML，发布到 `/d/` 路径；
+ *   - SSE `done` 携带 { docId, renderUrl, docJsonUrl }。
+ *
+ * 安全红线：API Key 只从 `Deno.env.get()` 读取，绝不出现在日志与响应中。
+ */
+
+import { handleCors } from '../_shared/cors.ts';
+import { SSE_HEADERS, jsonError } from '../_shared/json.ts';
+import { AppError, toAppError } from '../_shared/errors.ts';
+import { requireUser, type Caller } from '../_shared/auth.ts';
+import { adminClient } from '../_shared/supabaseAdmin.ts';
+import { loadAppType, loadConfig, loadModel } from '../_shared/config.ts';
+import { compose, composeDoc, composeRepair } from '../_shared/prompt/compose.ts';
+import { chooseAdapter, isMock } from '../_shared/llm/index.ts';
+import { buildMockHtml, buildMockDoc } from '../_shared/llm/mock.ts';
+import type { LlmRequest, TokenUsage } from '../_shared/llm/types.ts';
+import { normalizeUsage } from '../_shared/llm/pricing.ts';
+import { getStore, shadowStore } from '../_shared/store/index.ts';
+import { extractTitle, validateHtml } from '../_shared/validateHtml.ts';
+import { validateDoc, buildDocRepairPrompt, MAX_DOC_BYTES } from '../_shared/doc/validate.ts';
+import { renderDoc } from '../_shared/doc/render.ts';
+import { isDocType, type DocModel } from '../_shared/doc/types.ts';
+import { assertUnderMonthlyCap, checkTokenLimit, costOf, currentPeriod } from '../_shared/cost.ts';
+
+/** 单次生成超时（毫秒）。 */
+const MODEL_TIMEOUT_MS = 120_000;
+/** 心跳间隔（毫秒）。 */
+const HEARTBEAT_MS = 10_000;
+
+interface GenerateBody {
+  prompt?: string;
+  appType?: string;
+  /** T06：产物大类，'app'（默认，单文件 HTML）或 'doc'（结构化文档）。 */
+  category?: string;
+  /** T06：文档类型（仅 category='doc' 时有效）。 */
+  docType?: string;
+  /** T06：教材版本 id（T07 回填用）。 */
+  textbookVersionId?: string | null;
+  /** T07：教材检索上下文（文本，由后端注入；前端可透传为空）。 */
+  textbookContext?: string;
+  subject?: string;
+  grade?: string;
+  textbook?: string;
+  duration?: string;
+  difficulty?: string;
+  modelKey?: string;
+  idempotencyKey?: string;
+}
+
+Deno.serve(async (req: Request): Promise<Response> => {
+  const cors = handleCors(req);
+  if (cors) return cors;
+
+  if (req.method !== 'POST') {
+    return jsonError(405, { code: 'UNKNOWN', message: '请使用 POST 请求' });
+  }
+
+  let caller: Caller;
+  let body: GenerateBody;
+  try {
+    caller = await requireUser(req);
+    body = (await req.json()) as GenerateBody;
+  } catch (err) {
+    const e = toAppError(err);
+    return jsonError(e.httpStatus, { code: e.code, message: e.message });
+  }
+
+  const prompt = (body.prompt ?? '').trim();
+  if (prompt.length < 5) {
+    return jsonError(422, { code: 'VALIDATE_FAILED', message: '请把需求写得更具体一些（至少 5 个字）' });
+  }
+
+  const category = body.category === 'doc' ? 'doc' : 'app';
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let heartbeatTimer: number | undefined;
+      let settled = false;
+      /** 当前任务 ID（预扣后设置，供失败时退还）。 */
+      let currentJobId: string | null = null;
+
+      const send = (event: string, data: unknown): void => {
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          /* 流已关闭 */
+        }
+      };
+
+      const heartbeat = (): void => {
+        try {
+          controller.enqueue(encoder.encode(': keep-alive\n\n'));
+        } catch {
+          /* 忽略 */
+        }
+      };
+
+      const fail = async (err: unknown, jobId: string | null, reserved: number): Promise<void> => {
+        const e = toAppError(err);
+        let balance = 0;
+        let refunded = false;
+        if (jobId && e.refundable) {
+          const sb = adminClient();
+          const { data } = await sb.rpc('refund_generation', {
+            p_job_id: jobId,
+            p_error_code: e.code,
+            p_error_message: e.message,
+          });
+          const raw = (data ?? {}) as { refunded?: boolean; balance?: number };
+          refunded = raw.refunded === true;
+          balance = Number(raw.balance ?? 0);
+        }
+        send('error', {
+          code: e.code,
+          message: e.message,
+          refunded,
+          creditsBalance: balance,
+          retryable: e.retryable,
+        });
+        if (!settled) {
+          settled = true;
+          controller.close();
+        }
+      };
+
+      try {
+        heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS);
+        const sb = adminClient();
+
+        // ---- 1. 生成前检查（日限 / 并发 / 月度阀）----
+        await assertUnderMonthlyCap();
+        const allowed = await sb.rpc('check_generation_allowed');
+        const allowedRaw = (allowed.data ?? {}) as { allowed?: boolean; code?: string; message?: string };
+        if (allowedRaw.allowed === false) {
+          throw new AppError(
+            (allowedRaw.code ?? 'DAILY_LIMIT') as AppError['code'],
+            allowedRaw.message ?? '暂时无法生成，请稍后再试',
+            { retryable: false, refundable: false },
+          );
+        }
+
+        // ---- 文档分支（category='doc'）----
+        if (category === 'doc') {
+          const docType = isDocType(body.docType) ? body.docType : 'lesson_plan';
+          const typeCfg = await loadAppType(docType);
+          const creditCost = typeCfg?.creditCost ?? 1;
+          const preferredKey = body.modelKey || typeCfg?.modelOverride || undefined;
+          const modelCfg = await loadModel(preferredKey);
+
+          const jobId = crypto.randomUUID();
+          const appId = crypto.randomUUID();
+          const idem = body.idempotencyKey ?? jobId;
+
+          const reserve = await sb.rpc('reserve_credits', {
+            p_amount: creditCost,
+            p_job_id: jobId,
+            p_app_type: docType,
+            p_model: modelCfg?.id ?? '',
+          });
+          const reserveRaw = (reserve.data ?? {}) as { ok?: boolean; balance?: number; code?: string };
+          if (reserveRaw.ok !== true) {
+            throw new AppError(
+              (reserveRaw.code ?? 'INSUFFICIENT_CREDITS') as AppError['code'],
+              '积分不足啦，可以用兑换码充值，或联系管理员',
+              { refundable: false, retryable: false },
+            );
+          }
+          const balanceAfterReserve = Number(reserveRaw.balance ?? 0);
+          currentJobId = jobId;
+
+          await sb.from('generation_jobs').insert({
+            id: jobId,
+            user_id: caller.userId,
+            app_id: appId,
+            app_type: docType,
+            model: modelCfg?.id ?? '',
+            status: 'running',
+            reserved_credits: creditCost,
+            idempotency_key: idem,
+          });
+          await sb.from('apps').insert({
+            id: appId,
+            author_id: caller.userId,
+            title: prompt.slice(0, 40),
+            prompt_raw: prompt,
+            app_type: docType,
+            category: 'doc',
+            doc_type: docType,
+            subject: body.subject ?? '',
+            grade: body.grade ?? '',
+            textbook: body.textbook ?? '',
+            duration: body.duration ?? '',
+            difficulty: body.difficulty ?? '',
+            textbook_version_id: body.textbookVersionId ?? null,
+            status: 'draft',
+            html_status: 'pending',
+            credits_cost: creditCost,
+          });
+
+          // ---- 4. 拼装文档提示词 ----
+          send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
+          const composed = await composeDoc({
+            docType,
+            promptKey: typeCfg?.promptKey ?? '',
+            prompt,
+            subject: body.subject,
+            grade: body.grade,
+            textbook: body.textbook,
+            duration: body.duration,
+            difficulty: body.difficulty,
+            textbookContext: body.textbookContext,
+          });
+          await sb
+            .from('generation_jobs')
+            .update({ prompt_version: composed.promptVersion })
+            .eq('id', jobId);
+          send('stage', { stage: 'understand', label: '理解教学需求', status: 'done' });
+          send('stage', { stage: 'design', label: '设计文档结构', status: 'done' });
+          send('stage', { stage: 'code', label: '生成文档内容', status: 'running' });
+
+          // ---- 5. 调模型（SSE 透传）----
+          const { adapter, provider } = chooseAdapter(modelCfg?.provider);
+          const cfg = await loadConfig();
+          const maxOutput = Number(cfg.limit.maxOutputTokens ?? modelCfg?.maxOutputTokens ?? 8000);
+
+          const llmReq: LlmRequest = {
+            systemPrompt: composed.systemPrompt,
+            userPrompt: composed.userPrompt,
+            maxOutputTokens: maxOutput,
+            temperature: 0.7,
+          };
+
+          const startedAt = Date.now();
+          let raw = '';
+          let usage: TokenUsage = {
+            promptTokens: 0,
+            completionTokens: 0,
+            cachedTokens: 0,
+            estimated: true,
+          };
+
+          if (isMock(adapter)) {
+            const docJson = buildMockDoc(docType, prompt);
+            const chunk = 240;
+            for (let i = 0; i < docJson.length; i += chunk) {
+              send('delta', { text: docJson.slice(i, i + chunk) });
+              raw += docJson.slice(i, i + chunk);
+            }
+            usage = normalizeUsage(null, docJson, composed.systemPrompt + composed.userPrompt);
+          } else {
+            const ctx = {
+              modelId: modelCfg?.modelId ?? 'deepseek-chat',
+              apiBase: modelCfg?.apiBase ?? '',
+              maxOutputTokens: maxOutput,
+              stream: true,
+            };
+            const built = adapter.buildRequest(llmReq, ctx);
+
+            const ac = new AbortController();
+            const timer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+            let res: Response;
+            try {
+              res = await fetch(built.url, {
+                method: 'POST',
+                headers: built.headers,
+                body: JSON.stringify(built.body),
+                signal: ac.signal,
+              });
+            } finally {
+              clearTimeout(timer);
+            }
+
+            if (!res.ok || !res.body) {
+              const text = await res.text().catch(() => '');
+              console.error(`[generate:doc] 模型返回 ${res.status}`);
+              throw new AppError('MODEL_ERROR', text ? 'AI 服务返回异常，本次不扣积分' : 'AI 服务开小差了，本次不扣积分');
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              let idx = buffer.indexOf('\n\n');
+              while (idx >= 0) {
+                const frame = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                for (const line of frame.split('\n')) {
+                  const parsed = adapter.parseChunk(line);
+                  if (!parsed) continue;
+                  if (parsed.text) {
+                    raw += parsed.text;
+                    send('delta', { text: parsed.text });
+                  }
+                  if (parsed.usage) usage = parsed.usage;
+                  if (parsed.finish) break;
+                }
+                idx = buffer.indexOf('\n\n');
+              }
+            }
+            if (usage.promptTokens === 0) {
+              usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
+            }
+          }
+
+          // ---- 6. 校验 + 重试 1 次 ----
+          send('stage', { stage: 'code', label: '生成文档内容', status: 'done' });
+          send('stage', { stage: 'verify', label: '自检与优化', status: 'running' });
+
+          let result = validateDoc(raw, MAX_DOC_BYTES);
+          if (!result.ok && !isMock(adapter)) {
+            const repairPrompt = buildDocRepairPrompt(composed.userPrompt, result.errors);
+            raw = await callOnce(adapter, {
+              ...llmReq,
+              userPrompt: repairPrompt,
+            }, {
+              modelId: modelCfg?.modelId ?? 'deepseek-chat',
+              apiBase: modelCfg?.apiBase ?? '',
+              maxOutputTokens: maxOutput,
+              stream: false,
+            });
+            result = validateDoc(raw, MAX_DOC_BYTES);
+          }
+
+          if (!result.ok || !result.model) {
+            send('stage', { stage: 'verify', label: '自检与优化', status: 'failed' });
+            throw new AppError('VALIDATE_FAILED', '这次没生成成功，已退还积分，点重试或换个说法');
+          }
+
+          // ---- 7. 写产物：DocModel JSON + 渲染 HTML ----
+          const generatedAt = new Date().toISOString();
+          const finalModel = {
+            ...result.model,
+            id: appId,
+            version: result.model.version && result.model.version > 0 ? result.model.version : 1,
+            createdAt: result.model.createdAt ?? generatedAt,
+          };
+          const json = JSON.stringify(finalModel);
+          const store = await getStore();
+          const putJson = await store.putDocJson(appId, finalModel.version, json);
+          const html = renderDoc(finalModel);
+          const putHtml = await store.putDocHtml(appId, finalModel.version, html);
+
+          if (cfg.artifact.warmup) void store.warmup(putHtml.url);
+          // 影子副本（供 serve-app /d/ 回源兜底）
+          void shadowStore.putDocHtml(appId, finalModel.version, html).catch(() => undefined);
+          void shadowStore.putDocJson(appId, finalModel.version, json).catch(() => undefined);
+
+          const title = finalModel.meta?.title || prompt.slice(0, 30);
+          await sb
+            .from('apps')
+            .update({
+              title,
+              category: 'doc',
+              doc_type: docType,
+              doc_json_url: putJson.url,
+              doc_version: finalModel.version,
+              verify_status: finalModel.verifyHints && finalModel.verifyHints.length > 0 ? 'partial' : 'pending',
+              html_url: putHtml.url,
+              html_status: putHtml.readyNow ? 'ready' : 'pending',
+              html_size_bytes: putHtml.sizeBytes,
+              html_sha256: putHtml.sha256,
+              html_version: finalModel.version,
+              model: isMock(adapter) ? 'mock' : (modelCfg?.id ?? ''),
+              tokens_in: usage.promptTokens,
+              tokens_out: usage.completionTokens,
+              generation_ms: Date.now() - startedAt,
+              cover_seed: putHtml.sha256.slice(0, 16),
+            })
+            .eq('id', appId);
+
+          await sb.rpc('settle_generation', {
+            p_job_id: jobId,
+            p_tokens_in: usage.promptTokens,
+            p_tokens_out: usage.completionTokens,
+            p_cost_cny: isMock(adapter) ? 0 : costOf(usage, modelCfg?.pricing ?? { input: 1.5, cachedInput: 0.05, output: 4.5, peakMultiplier: 2 }, new Date(startedAt)),
+            p_model: isMock(adapter) ? 'mock' : (modelCfg?.id ?? ''),
+            p_app_id: appId,
+            p_ms: Date.now() - startedAt,
+          });
+
+          // ---- 生成即沉淀（BR-014/015）：写入 doc_library，为后续 Skill 提炼降本备料 ----
+          // 失败不影响主流程（沉淀是异步收益，不能因为它退还一次成功的生成）。
+          void sb
+            .rpc('deposit_doc_library', {
+              p_doc_id: appId,
+              p_owner_id: caller.userId,
+              p_category: 'doc',
+              p_doc_type: docType,
+              p_subject: finalModel.meta?.subject ?? body.subject ?? '',
+              p_grade: finalModel.meta?.grade ?? body.grade ?? '',
+              p_textbook_version_id: body.textbookVersionId ?? null,
+              p_keywords: deriveKeywords(finalModel, docType, body),
+              p_is_public: false,
+            })
+            .then(() => undefined)
+            .catch(() => undefined);
+
+          void sb
+            .from('events')
+            .insert({
+              name: 'generate_doc_success',
+              user_id: caller.userId,
+              app_id: appId,
+              props: { docType, model: modelCfg?.id ?? provider, period: currentPeriod() },
+            })
+            .then(() => undefined)
+            .catch(() => undefined);
+
+          send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
+          send('done', {
+            jobId,
+            appId,
+            docId: appId,
+            category: 'doc',
+            docType,
+            title,
+            summary: prompt.slice(0, 60),
+            renderUrl: putHtml.url,
+            docJsonUrl: putJson.url,
+            htmlStatus: putHtml.readyNow ? 'ready' : 'pending',
+            tokensIn: usage.promptTokens,
+            tokensOut: usage.completionTokens,
+            creditsCost: creditCost,
+            creditsBalance: balanceAfterReserve,
+            model: isMock(adapter) ? 'mock' : (modelCfg?.id ?? ''),
+            promptVersion: composed.promptVersion,
+          });
+          return;
+        }
+
+        // ---- 应用分支（category='app'，原有逻辑）----
+        const appType = body.appType ?? 'auto';
+        const typeCfg = await loadAppType(appType);
+        const creditCost = typeCfg?.creditCost ?? 1;
+        const preferredKey = body.modelKey || typeCfg?.modelOverride || undefined;
+        const modelCfg = await loadModel(preferredKey);
+
+        // ---- 3. 预扣积分（先扣，失败退还）----
+        const jobId = crypto.randomUUID();
+        const appId = crypto.randomUUID();
+        const idem = body.idempotencyKey ?? jobId;
+
+        const reserve = await sb.rpc('reserve_credits', {
+          p_amount: creditCost,
+          p_job_id: jobId,
+          p_app_type: appType,
+          p_model: modelCfg?.id ?? '',
+        });
+        const reserveRaw = (reserve.data ?? {}) as { ok?: boolean; balance?: number; code?: string };
+        if (reserveRaw.ok !== true) {
+          throw new AppError(
+            (reserveRaw.code ?? 'INSUFFICIENT_CREDITS') as AppError['code'],
+            '积分不足啦，可以用兑换码充值，或联系管理员',
+            { refundable: false, retryable: false },
+          );
+        }
+        const balanceAfterReserve = Number(reserveRaw.balance ?? 0);
+        currentJobId = jobId;
+
+        // 创建 job + app 草稿
+        await sb.from('generation_jobs').insert({
+          id: jobId,
+          user_id: caller.userId,
+          app_id: appId,
+          app_type: appType,
+          model: modelCfg?.id ?? '',
+          status: 'running',
+          reserved_credits: creditCost,
+          idempotency_key: idem,
+        });
+        await sb.from('apps').insert({
+          id: appId,
+          author_id: caller.userId,
+          title: prompt.slice(0, 40),
+          prompt_raw: prompt,
+          app_type: appType,
+          subject: body.subject ?? '',
+          grade: body.grade ?? '',
+          textbook: body.textbook ?? '',
+          duration: body.duration ?? '',
+          difficulty: body.difficulty ?? '',
+          status: 'draft',
+          html_status: 'pending',
+          credits_cost: creditCost,
+        });
+
+        // ---- 4. 拼装提示词 ----
+        send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
+        const composed = await compose({
+          appType,
+          promptKey: typeCfg?.promptKey ?? '',
+          prompt,
+          subject: body.subject,
+          grade: body.grade,
+          textbook: body.textbook,
+          duration: body.duration,
+          difficulty: body.difficulty,
+        });
+        await sb
+          .from('generation_jobs')
+          .update({ prompt_version: composed.promptVersion })
+          .eq('id', jobId);
+        send('stage', { stage: 'understand', label: '理解教学需求', status: 'done' });
+        send('stage', { stage: 'design', label: '设计应用结构', status: 'done' });
+        send('stage', { stage: 'code', label: '编写应用代码', status: 'running' });
+
+        // ---- 5. 调模型（SSE 透传）----
+        const { adapter, provider } = chooseAdapter(modelCfg?.provider);
+        const cfg = await loadConfig();
+        const maxOutput = Number(cfg.limit.maxOutputTokens ?? modelCfg?.maxOutputTokens ?? 8000);
+        const maxHtmlBytes = Number(cfg.limit.maxHtmlBytes ?? 204800);
+
+        const llmReq: LlmRequest = {
+          systemPrompt: composed.systemPrompt,
+          userPrompt: composed.userPrompt,
+          maxOutputTokens: maxOutput,
+          temperature: 0.7,
+        };
+
+        const startedAt = Date.now();
+        let raw = '';
+        let usage: TokenUsage = {
+          promptTokens: 0,
+          completionTokens: 0,
+          cachedTokens: 0,
+          estimated: true,
+        };
+
+        if (isMock(adapter)) {
+          // 无 Key 降级：分块吐出示例应用，帧格式与真实模型一致
+          const html = buildMockHtml(prompt);
+          const chunk = 240;
+          for (let i = 0; i < html.length; i += chunk) {
+            send('delta', { text: html.slice(i, i + chunk) });
+            raw += html.slice(i, i + chunk);
+          }
+          usage = normalizeUsage(null, html, composed.systemPrompt + composed.userPrompt);
+        } else {
+          const ctx = {
+            modelId: modelCfg?.modelId ?? 'deepseek-chat',
+            apiBase: modelCfg?.apiBase ?? '',
+            maxOutputTokens: maxOutput,
+            stream: true,
+          };
+          const built = adapter.buildRequest(llmReq, ctx);
+
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+          let res: Response;
+          try {
+            res = await fetch(built.url, {
+              method: 'POST',
+              headers: built.headers,
+              body: JSON.stringify(built.body),
+              signal: ac.signal,
+            });
+          } finally {
+            clearTimeout(timer);
+          }
+
+          if (!res.ok || !res.body) {
+            const text = await res.text().catch(() => '');
+            // ⚠️ 只记录状态码，绝不记录请求头（含 Authorization）
+            console.error(`[generate] 模型返回 ${res.status}`);
+            throw new AppError('MODEL_ERROR', text ? 'AI 服务返回异常，本次不扣积分' : 'AI 服务开小差了，本次不扣积分');
+          }
+
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let idx = buffer.indexOf('\n\n');
+            while (idx >= 0) {
+              const frame = buffer.slice(0, idx);
+              buffer = buffer.slice(idx + 2);
+              for (const line of frame.split('\n')) {
+                const parsed = adapter.parseChunk(line);
+                if (!parsed) continue;
+                if (parsed.text) {
+                  raw += parsed.text;
+                  send('delta', { text: parsed.text });
+                }
+                if (parsed.usage) usage = parsed.usage;
+                if (parsed.finish) break;
+              }
+              idx = buffer.indexOf('\n\n');
+            }
+          }
+          if (usage.promptTokens === 0) {
+            usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
+          }
+        }
+
+        // ---- 6. 校验 + 重试 1 次 ----
+        send('stage', { stage: 'code', label: '编写应用代码', status: 'done' });
+        send('stage', { stage: 'verify', label: '自检与优化', status: 'running' });
+
+        let result = validateHtml(raw, maxHtmlBytes);
+        if (!result.ok && !isMock(adapter)) {
+          const repairPrompt = await composeRepair(composed.userPrompt, result.errors);
+          raw = await callOnce(adapter, {
+            ...llmReq,
+            userPrompt: repairPrompt,
+          }, {
+            modelId: modelCfg?.modelId ?? 'deepseek-chat',
+            apiBase: modelCfg?.apiBase ?? '',
+            maxOutputTokens: maxOutput,
+            stream: false,
+          });
+          result = validateHtml(raw, maxHtmlBytes);
+        }
+
+        if (!result.ok) {
+          send('stage', { stage: 'verify', label: '自检与优化', status: 'failed' });
+          throw new AppError('VALIDATE_FAILED', '这次没生成成功，已退还积分，点重试或换个说法');
+        }
+
+        // ---- 7. token 上限与成本 ----
+        checkTokenLimit(
+          usage,
+          Number(cfg.limit.maxInputTokens ?? 8000),
+          Number(cfg.limit.maxOutputTokens ?? 8000),
+        );
+        const pricing = modelCfg?.pricing ?? { input: 1.5, cachedInput: 0.05, output: 4.5, peakMultiplier: 2 };
+        const costCny = isMock(adapter) ? 0 : costOf(usage, pricing, new Date(startedAt));
+        const generationMs = Date.now() - startedAt;
+
+        // ---- 8. 写产物 ----
+        const html = result.html;
+        const store = await getStore();
+        const put = await store.putAppHtml(appId, 1, html);
+        if (cfg.artifact.warmup) void store.warmup(put.url);
+        // 影子副本（供 serve-app 回源兜底）
+        void shadowStore.putAppHtml(appId, 1, html).catch(() => undefined);
+
+        const title = extractTitle(html) || prompt.slice(0, 30);
+        await sb
+          .from('apps')
+          .update({
+            title,
+            html_url: put.url,
+            html_status: put.readyNow ? 'ready' : 'pending',
+            html_size_bytes: put.sizeBytes,
+            html_sha256: put.sha256,
+            html_version: 1,
+            model: isMock(adapter) ? 'mock' : (modelCfg?.id ?? ''),
+            tokens_in: usage.promptTokens,
+            tokens_out: usage.completionTokens,
+            generation_ms: generationMs,
+            cover_seed: put.sha256.slice(0, 16),
+          })
+          .eq('id', appId);
+
+        await sb.rpc('settle_generation', {
+          p_job_id: jobId,
+          p_tokens_in: usage.promptTokens,
+          p_tokens_out: usage.completionTokens,
+          p_cost_cny: costCny,
+          p_model: isMock(adapter) ? 'mock' : (modelCfg?.id ?? ''),
+          p_app_id: appId,
+          p_ms: generationMs,
+        });
+
+        // 埋点：生成成功
+        void sb
+          .from('events')
+          .insert({
+            name: 'generate_success',
+            user_id: caller.userId,
+            app_id: appId,
+            props: { appType, model: modelCfg?.id ?? provider, costCny, period: currentPeriod() },
+          })
+          .then(() => undefined)
+          .catch(() => undefined);
+
+        send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
+        send('done', {
+          jobId,
+          appId,
+          title,
+          summary: prompt.slice(0, 60),
+          html,
+          htmlUrl: put.url,
+          htmlStatus: put.readyNow ? 'ready' : 'pending',
+          tokensIn: usage.promptTokens,
+          tokensOut: usage.completionTokens,
+          creditsCost: creditCost,
+          creditsBalance: balanceAfterReserve,
+          model: isMock(adapter) ? 'mock' : (modelCfg?.id ?? ''),
+          promptVersion: composed.promptVersion,
+        });
+      } catch (err) {
+        await fail(err, currentJobId, 0);
+      } finally {
+        if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
+        if (!settled) {
+          settled = true;
+          try {
+            controller.close();
+          } catch {
+            /* 已关闭 */
+          }
+        }
+      }
+    },
+  });
+
+  return new Response(stream, { headers: SSE_HEADERS });
+});
+
+/**
+ * 从 DocModel 推导沉淀关键词（供 doc_library 同类聚合与后续 Skill 命中判定）。
+ *
+ * 只取结构化元信息，不塞正文，避免关键词列膨胀。
+ *
+ * @param model 文档模型。
+ * @param docType 文档类型。
+ * @param body 原始请求（补齐 meta 缺失时的学科/年级）。
+ * @returns 去重后的关键词数组（≤12 个）。
+ */
+function deriveKeywords(model: DocModel, docType: string, body: GenerateBody): string[] {
+  const raw: string[] = [
+    docType,
+    model.meta?.subject ?? '',
+    body.subject ?? '',
+    model.meta?.grade ?? '',
+    body.grade ?? '',
+    model.meta?.textbook ?? '',
+    body.textbook ?? '',
+    model.meta?.title ?? '',
+    ...(model.verifyHints ?? []).slice(0, 3),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const v = String(item ?? '').trim();
+    if (v.length === 0 || v.length > 40) continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+/**
+ * 非流式调用一次模型（用于自修复重试）。
+ *
+ * @param adapter 适配器。
+ * @param req 请求。
+ * @param ctx 上下文。
+ */
+async function callOnce(
+  adapter: ReturnType<typeof chooseAdapter>['adapter'],
+  req: LlmRequest,
+  ctx: { modelId: string; apiBase: string; maxOutputTokens: number; stream: boolean },
+): Promise<string> {
+  const built = adapter.buildRequest(req, ctx);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(built.url, {
+      method: 'POST',
+      headers: built.headers,
+      body: JSON.stringify(built.body),
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new AppError('MODEL_ERROR', 'AI 服务开小差了，本次不扣积分');
+  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return json.choices?.[0]?.message?.content ?? '';
+}
