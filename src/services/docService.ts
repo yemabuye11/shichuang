@@ -2,7 +2,6 @@ import type { DocModel, DocType } from '@/types/doc';
 import { isMockMode } from '@/config/env';
 import * as mockStore from './mock/mockStore';
 import * as textbookService from './textbookService';
-import type { App } from '@/types/models';
 
 /**
  * 文档服务（T06）：加载 / 保存 / 发布 DocModel。
@@ -31,9 +30,9 @@ export async function loadDoc(docId: string): Promise<DocModel | null> {
       return null;
     }
   }
-  const st = await getRealApp(docId);
+  const st = await getRealAppRow(docId);
   if (!st) return null;
-  const url = st.docJsonUrl;
+  const url = st.doc_json_url;
   if (!url) return null;
   try {
     const res = await fetch(url);
@@ -60,9 +59,38 @@ export async function saveVersion(
     const version = await mockStore.saveDocVersion(docId, docJson);
     return { version, docJsonUrl: 'local' };
   }
-  // T08/T07：真实模式此处写 Storage 并 publish；当前先返回占位
-  const version = 1;
-  return { version, docJsonUrl: '' };
+
+  // 真实模式：仅作者可保存新版本（防陌生人篡改；作者本人永远能恢复/再编辑）
+  const { getSupabase } = await import('./supabaseClient');
+  const sb = getSupabase();
+  const uid = await getCurrentUserId();
+  if (!sb || !uid) throw new Error('请先登录后再保存');
+  const app = await getRealAppRow(docId);
+  if (!app) throw new Error('文档不存在');
+  if (app.author_id !== uid) throw new Error('只有作者才能保存此文档');
+
+  const newVersion = (app.doc_version ?? 0) + 1;
+  const path = docStoragePath(docId, newVersion);
+  const { error: upErr } = await sb.storage
+    .from('docs')
+    .upload(path, new Blob([docJson], { type: 'application/json' }), {
+      upsert: true,
+      contentType: 'application/json',
+    });
+  if (upErr) throw new Error('保存失败：' + upErr.message);
+
+  const { data: pub } = sb.storage.from('docs').getPublicUrl(path);
+  const { error: updErr } = await sb
+    .from('apps')
+    .update({
+      doc_json_url: pub.publicUrl,
+      doc_version: newVersion,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', docId);
+  if (updErr) throw new Error('更新文档信息失败：' + updErr.message);
+
+  return { version: newVersion, docJsonUrl: pub.publicUrl };
 }
 
 /**
@@ -89,10 +117,14 @@ export async function renderAndPublish(docId: string): Promise<{ renderUrl: stri
  * @returns 沉淀的知识点条数。
  */
 export async function depositKnowledge(docId: string, model: DocModel): Promise<number> {
-  const app = isMockMode()
-    ? (await mockStore.load()).apps.find((a) => a.id === docId) ?? null
-    : await getRealApp(docId);
-  const versionId = app?.textbookVersionId ?? null;
+  let versionId: string | null = null;
+  if (isMockMode()) {
+    const app = (await mockStore.load()).apps.find((a) => a.id === docId) ?? null;
+    versionId = app?.textbookVersionId ?? null;
+  } else {
+    const app = await getRealAppRow(docId);
+    versionId = app?.textbook_version_id ?? null;
+  }
   if (!versionId) return 0;
 
   const hints = model.verifyHints ?? [];
@@ -111,22 +143,71 @@ export async function depositKnowledge(docId: string, model: DocModel): Promise<
   return hints.length;
 }
 
-/** 读取真实模式下的应用行（含 doc_json_url 等）。 */
-async function getRealApp(docId: string): Promise<App | null> {
+/** 真实模式应用行的原始字段（snake_case，直接对齐数据库列，避免 camel/snake 映射坑）。 */
+interface RealAppRow {
+  id: string;
+  category: string | null;
+  doc_type: string | null;
+  doc_json_url: string | null;
+  doc_version: number | null;
+  verify_status: string | null;
+  textbook_version_id: string | null;
+  title: string | null;
+  author_id: string | null;
+}
+
+/** 读取真实模式下的应用行（含 doc_json_url / author_id 等）。 */
+async function getRealAppRow(docId: string): Promise<RealAppRow | null> {
   try {
     const { getSupabase } = await import('./supabaseClient');
     const sb = getSupabase();
     if (!sb) return null;
     const { data, error } = await sb
       .from('apps')
-      .select('id, category, doc_type, doc_json_url, doc_version, verify_status, textbook_version_id, title')
+      .select(
+        'id, category, doc_type, doc_json_url, doc_version, verify_status, textbook_version_id, title, author_id',
+      )
       .eq('id', docId)
       .maybeSingle();
     if (error || !data) return null;
-    return data as unknown as App;
+    return data as unknown as RealAppRow;
   } catch {
     return null;
   }
+}
+
+/** 取当前登录用户 id（真实模式）。 */
+async function getCurrentUserId(): Promise<string | null> {
+  try {
+    const { getSupabase } = await import('./supabaseClient');
+    const sb = getSupabase();
+    if (!sb) return null;
+    const { data } = await sb.auth.getUser();
+    return data.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 判断当前登录用户是否为该文档作者。
+ * - MOCK 模式：恒为 true（本机演示，文档即本人创建）；
+ * - 真实模式：比对 apps.author_id 与当前登录用户。
+ */
+export async function isDocAuthor(docId: string): Promise<boolean> {
+  if (isMockMode()) return true;
+  const uid = await getCurrentUserId();
+  if (!uid) return false;
+  const app = await getRealAppRow(docId);
+  return app?.author_id === uid;
+}
+
+/** 文档结构化 JSON 的 Storage 对象路径（与 Edge 端 docJsonPath 同格式）。 */
+function docStoragePath(docId: string, version: number): string {
+  const now = new Date();
+  const yyyy = String(now.getUTCFullYear());
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  return `d/${yyyy}/${mm}/${docId}/v${version}.json`;
 }
 
 /** 判断某类型是否为文档类。 */

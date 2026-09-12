@@ -40,6 +40,22 @@ export function DocRunPage(): JSX.Element {
   /** 当前应展示的版本号。 */
   const version = savedVersion ?? model?.version ?? 1;
 
+  /** 当前登录用户是否为该文档作者（决定是否显示编辑 / 保存入口）。 */
+  const [canEdit, setCanEdit] = useState(false);
+  useEffect(() => {
+    if (!id) {
+      setCanEdit(false);
+      return;
+    }
+    let alive = true;
+    void docService.isDocAuthor(id).then((ok) => {
+      if (alive) setCanEdit(ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [id]);
+
   useEffect(() => {
     if (!id) {
       setStatus('notfound');
@@ -166,6 +182,7 @@ export function DocRunPage(): JSX.Element {
           >
             复制链接
           </Button>
+          {canEdit && (
           <Button
             variant="outlined"
             size="small"
@@ -175,6 +192,7 @@ export function DocRunPage(): JSX.Element {
           >
             编辑
           </Button>
+          )}
           <Button
             variant="text"
             size="small"
@@ -212,6 +230,7 @@ export function DocRunPage(): JSX.Element {
       <Divider sx={{ my: 3 }} />
 
       <Stack direction="row" spacing={1.25}>
+        {canEdit && (
         <Button
           variant="outlined"
           size="large"
@@ -221,6 +240,7 @@ export function DocRunPage(): JSX.Element {
         >
           在线编辑
         </Button>
+        )}
         <Button
           variant="contained"
           size="large"
@@ -242,6 +262,7 @@ export function DocRunPage(): JSX.Element {
       </Stack>
 
       <Stack direction="row" spacing={1.25}>
+        {canEdit && (
         <Button
           variant="outlined"
           size="large"
@@ -251,6 +272,7 @@ export function DocRunPage(): JSX.Element {
         >
           保存新版本
         </Button>
+        )}
         <Button
           variant="text"
           size="large"

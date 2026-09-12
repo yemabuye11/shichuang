@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useRef, useState, type ChangeEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import {
   Box,
   Button,
@@ -60,6 +60,22 @@ export function DocEditorPage(): JSX.Element {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const version = savedVersion ?? model?.version ?? 1;
+
+  /** 当前登录用户是否为该文档作者（非作者锁定为只读，防止陌生人篡改；作者本人永远可恢复）。 */
+  const [canEdit, setCanEdit] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!id) {
+      setCanEdit(false);
+      return;
+    }
+    let alive = true;
+    void docService.isDocAuthor(id).then((ok) => {
+      if (alive) setCanEdit(ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [id]);
 
   const handleBlocksChange = useCallback(
     (blocks: DocBlock[]) => {
@@ -126,6 +142,22 @@ export function DocEditorPage(): JSX.Element {
         description="文档可能已被删除，或链接不完整。"
         actionText="回到首页"
         onAction={() => navigate(ROUTES.HOME)}
+      />
+    );
+  }
+
+  if (status === 'ready' && canEdit === null) {
+    return <InlineLoading message="正在校验权限…" />;
+  }
+
+  if (status === 'ready' && canEdit === false) {
+    return (
+      <EmptyState
+        icon="🔒"
+        title="仅作者可编辑"
+        description="这篇文档由作者创建，只有作者能修改内容。你可以复制链接分享给老师查看，或返回预览。"
+        actionText="返回预览"
+        onAction={() => navigate(id ? docRunPath(id) : ROUTES.HOME)}
       />
     );
   }
