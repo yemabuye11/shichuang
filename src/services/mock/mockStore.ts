@@ -403,3 +403,24 @@ export async function setHtmlStatus(appId: string, htmlStatus: HtmlStatus): Prom
   );
   await persist();
 }
+
+/**
+ * 保存文档的新版本（MOCK 模式）：递增 `docVersion` 并写入最新 DocModel JSON。
+ *
+ * 真实模式下版本写入由 Edge Function 完成（写 Storage + publish），此处仅模拟本地落库，
+ * 保证「保存新版本」按钮在离线演示时也有真实可感知的效果。
+ *
+ * @param docId 文档（应用）UUID。
+ * @param docJson 最新 DocModel JSON（可空 → 仅递增版本号）。
+ * @returns 新版本号。
+ */
+export async function saveDocVersion(docId: string, docJson: string | null): Promise<number> {
+  const app = state.apps.find((a) => a.id === docId);
+  if (!app) return 1;
+  const version = (app.docVersion ?? 1) + 1;
+  state.apps = state.apps.map((a) =>
+    a.id === docId ? { ...a, docVersion: version, docJson: docJson ?? a.docJson } : a,
+  );
+  await persist();
+  return version;
+}

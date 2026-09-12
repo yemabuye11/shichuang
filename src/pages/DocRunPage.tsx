@@ -3,6 +3,8 @@ import { Box, Button, Divider, Stack, Typography } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import HomeIcon from '@mui/icons-material/Home';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import SaveIcon from '@mui/icons-material/Save';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DocRenderer } from '@/components/editor/DocRenderer';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -31,6 +33,11 @@ export function DocRunPage(): JSX.Element {
   const toast = useToast();
   const [model, setModel] = useState<DocModel | null>(null);
   const [status, setStatus] = useState<Status>('loading');
+  /** 保存新版本后覆盖显示的版本号（本地优先，未保存时回退到模型自带版本）。 */
+  const [savedVersion, setSavedVersion] = useState<number | null>(null);
+
+  /** 当前应展示的版本号。 */
+  const version = savedVersion ?? model?.version ?? 1;
 
   useEffect(() => {
     if (!id) {
@@ -65,6 +72,29 @@ export function DocRunPage(): JSX.Element {
       () => toast.error('复制失败，请手动复制地址栏链接'),
     );
   }, [id, toast]);
+
+  /** 保存新版本：把当前 DocModel 落库并递增版本号（MOCK 本地生效）。 */
+  const handleSaveVersion = useCallback(async () => {
+    if (!id || !model) return;
+    try {
+      const res = await docService.saveVersion(id, JSON.stringify(model));
+      setSavedVersion(res.version);
+      toast.success(`已保存第 ${res.version} 版`);
+    } catch {
+      toast.error('保存版本失败，请重试');
+    }
+  }, [id, model, toast]);
+
+  /** 重新生成：带当前主题与文档类型回到生成页，省去重新描述。 */
+  const handleRegenerate = useCallback(() => {
+    if (!model) return;
+    const params = new URLSearchParams({
+      prompt: model.meta?.title ?? '',
+      type: model.kind,
+      category: 'doc',
+    });
+    navigate(`${ROUTES.GENERATE}?${params.toString()}`);
+  }, [model, navigate]);
 
   if (status === 'loading') {
     return <InlineLoading message="正在打开文档…" />;
@@ -108,6 +138,21 @@ export function DocRunPage(): JSX.Element {
           >
             {getDocTypeLabel(model.kind)}
           </Typography>
+          <Box
+            component="span"
+            sx={{
+              fontSize: 11.5,
+              fontWeight: 700,
+              color: 'text.secondary',
+              border: '1px solid',
+              borderColor: 'divider',
+              px: 1,
+              py: 0.25,
+              borderRadius: 999,
+            }}
+          >
+            v{version}
+          </Box>
           <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>平台渲染 · 教师核对后即可分享</Typography>
         </Stack>
         <Stack direction="row" spacing={1}>
@@ -192,11 +237,32 @@ export function DocRunPage(): JSX.Element {
         <Button
           variant="outlined"
           size="large"
-          startIcon={<HomeIcon />}
-          onClick={() => navigate(ROUTES.HOME)}
+          startIcon={<AutoAwesomeIcon />}
+          onClick={handleRegenerate}
           sx={{ flex: 1, minHeight: 50, borderColor: 'divider', color: 'text.primary', bgcolor: '#fff' }}
         >
-          再写一篇
+          重新生成
+        </Button>
+      </Stack>
+
+      <Stack direction="row" spacing={1.25}>
+        <Button
+          variant="outlined"
+          size="large"
+          startIcon={<SaveIcon />}
+          onClick={() => void handleSaveVersion()}
+          sx={{ flex: 1, minHeight: 50, borderColor: 'divider', color: 'text.primary', bgcolor: '#fff' }}
+        >
+          保存新版本
+        </Button>
+        <Button
+          variant="text"
+          size="large"
+          startIcon={<HomeIcon />}
+          onClick={() => navigate(ROUTES.HOME)}
+          sx={{ flex: 1, minHeight: 50 }}
+        >
+          首页
         </Button>
       </Stack>
 

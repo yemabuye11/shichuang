@@ -55,10 +55,8 @@ export async function saveVersion(
   docJson: string,
 ): Promise<{ version: number; docJsonUrl: string }> {
   if (isMockMode()) {
-    const st = await mockStore.load();
-    const app = st.apps.find((a) => a.id === docId);
-    const version = (app?.docVersion ?? 0) + 1;
-    // 真实模式才写 Storage；MOCK 仅更新本地 docJson
+    // MOCK：本地递增版本号并落库最新 DocModel（DocRunPage「保存新版本」按钮消费）
+    const version = await mockStore.saveDocVersion(docId, docJson);
     return { version, docJsonUrl: 'local' };
   }
   // T08/T07：真实模式此处写 Storage 并 publish；当前先返回占位
