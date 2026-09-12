@@ -291,6 +291,35 @@ export type AdminReportRow = {
   total_count: number;
 };
 // ---------------------------------------------------------------------------
+// T07（迁移 0013 / 0014 / 0015）：教材版本与沉淀知识点表
+//   注意：status / source 用 check 约束（非 Postgres enum 类型），故行类型内联字面量联合。
+// ---------------------------------------------------------------------------
+export type TextbookVersionRow = {
+  id: string;
+  owner_id: string;
+  year: string;
+  version: string;
+  publisher: string;
+  subject: string;
+  grade: string;
+  chapter: string | null;
+  upload_url: string | null;
+  status: 'draft' | 'verified';
+  created_at: string;
+  updated_at: string;
+};
+export type TextbookKnowledgeRow = {
+  id: string;
+  textbook_version_id: string;
+  section: string;
+  content: string;
+  status: 'pending' | 'verified';
+  verified_by: string | null;
+  source: 'ai' | 'teacher' | 'upload';
+  created_at: string;
+  updated_at: string;
+};
+// ---------------------------------------------------------------------------
 // Database 聚合类型（supabase-js 泛型入口）
 // ---------------------------------------------------------------------------
 export type Database = {
@@ -373,6 +402,18 @@ export type Database = {
         Row: { id: number; name: string; user_id: string | null; anon_id: string; app_id: string | null; props: Json; created_at: string };
         Insert: { id?: number; name: string; user_id?: string | null; anon_id?: string | null; app_id?: string | null; props?: Json | null; created_at?: string | null };
         Update: Partial<{ name: string; props: Json }>;
+        Relationships: [];
+      };
+      textbook_versions: {
+        Row: TextbookVersionRow;
+        Insert: Partial<TextbookVersionRow> & { owner_id: string };
+        Update: Partial<TextbookVersionRow>;
+        Relationships: [];
+      };
+      textbook_knowledge: {
+        Row: TextbookKnowledgeRow;
+        Insert: Partial<TextbookKnowledgeRow> & { textbook_version_id: string; section: string; content: string };
+        Update: Partial<TextbookKnowledgeRow>;
         Relationships: [];
       };
     };

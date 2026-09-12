@@ -15,7 +15,10 @@ import * as mockStore from './mock/mockStore';
 
 /** 列出教材版本（供级联选择）。 */
 export async function listTextbookVersions(): Promise<TextbookVersion[]> {
-  if (isMockMode()) return mockStore.listTextbookVersions();
+  if (isMockMode()) {
+    await mockStore.load();
+    return mockStore.listTextbookVersions();
+  }
   const sb = getSupabase();
   if (!sb) return [];
   const { data, error } = await sb
@@ -55,9 +58,13 @@ export async function addTextbookVersion(input: {
   if (isMockMode()) return mockStore.addTextbookVersion(input);
   const sb = getSupabase();
   if (!sb) return null;
+  const { data: authData } = await sb.auth.getUser();
+  const ownerId = authData.user?.id;
+  if (!ownerId) return null;
   const { data, error } = await sb
     .from('textbook_versions')
     .insert({
+      owner_id: ownerId,
       year: input.year,
       version: input.version,
       publisher: input.publisher,
