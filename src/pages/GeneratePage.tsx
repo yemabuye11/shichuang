@@ -13,6 +13,7 @@ import { ExampleChips } from '@/components/generate/ExampleChips';
 import { CostHint } from '@/components/generate/CostHint';
 import { useAuth } from '@/hooks/useAuth';
 import { useGenerate } from '@/hooks/useGenerate';
+import { useTextbook } from '@/hooks/useTextbook';
 import { useToast } from '@/components/common/ToastHost';
 import { generatingPath, ROUTES } from '@/config/routes';
 import { getAppTypeCost, getDocTypeCost, getDocTypeLabel, isDocTypeKey, MIN_PROMPT_LENGTH } from '@/config/constants';
@@ -36,6 +37,7 @@ export function GeneratePage(): JSX.Element {
   const { user, brand } = useAuth();
   const toast = useToast();
   const { start } = useGenerate();
+  const { versions, options } = useTextbook();
   const [params] = useSearchParams();
 
   const [prompt, setPrompt] = useState('');
@@ -189,7 +191,8 @@ export function GeneratePage(): JSX.Element {
               <DocTypeSelector value={docType} onChange={setDocType} />
             </Box>
             <TextbookCascade
-              versions={[]}
+              options={options}
+              versions={versions}
               selectedVersionId={textbookVersionId}
               onSelectVersion={setTextbookVersionId}
               chapter={chapter}

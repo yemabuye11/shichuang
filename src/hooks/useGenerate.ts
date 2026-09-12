@@ -58,7 +58,8 @@ export interface GenerateSnapshot {
 /** 初始快照。doc 类生成额外插入 textbook_search 阶段。 */
 function initialSnapshot(req?: GenerateRequest): GenerateSnapshot {
   const base = GENERATION_STAGES.map((s) => ({ stage: s.stage, label: s.label, status: 'pending' as const }));
-  const stages: StageState[] = req?.category === 'doc' ? insertTextbookStage(base) : base;
+  const stages: StageState[] =
+    req?.category === 'doc' && req?.textbookVersionId ? insertTextbookStage(base) : base;
   return {
     status: 'idle',
     jobId: '',

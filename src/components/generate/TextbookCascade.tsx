@@ -1,36 +1,74 @@
-import { Box, Chip, Stack, TextField, Typography } from '@mui/material';
+import { useMemo, useState } from 'react';
+import { Box, Chip, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
-import type { TextbookVersion } from '@/types/doc';
+import type { TextbookCascadeOptions, TextbookVersion } from '@/types/doc';
 
 /**
  * 教材版本级联选择器（UI-2，category='doc' 时显示）。
  *
- * ⚠️ T06 仅实现 UI 壳：教材库检索与回填逻辑在 T07 落地。
- * 本批：
- * - `versions` 由上层传入（T06 通常为空，展示「教材库即将上线」提示，可跳过）；
- * - 选中某版本后通过 `onSelectVersion(id)` 上报 `textbookVersionId`；
- * - 章节 / 知识点为选填自由文本，通过 `onChapterChange` 上报，T07 会并入 `textbookContext`。
+ * T07 接逻辑：版本列表与级联筛选项由上层通过 `useTextbook` 注入（mock / 真实统一）；
+ * 支持「年级 → 学科 → 出版社 → 版本」逐级收窄，选中具体版本后经
+ * `onSelectVersion(id)` 上报 `textbookVersionId`（最终由 `generateService` 传入生成请求）。
+ *
+ * ⚠️ 搜索密钥只在 Edge Secrets，本组件**绝不**接触任何检索 API Key。
  */
 export interface TextbookCascadeProps {
-  /** 可选教材版本（T07 接入真实库后填充）。 */
+  /** 级联筛选项（各维度去重集合），由 `useTextbook` 提供。 */
+  options: TextbookCascadeOptions;
+  /** 可选教材版本（由 `useTextbook` 提供）。 */
   versions: readonly TextbookVersion[];
   /** 当前选中的版本 id（null = 未绑定）。 */
   selectedVersionId: string | null;
   /** 选中版本回调。 */
   onSelectVersion: (id: string | null) => void;
-  /** 章节 / 知识点（选填）。 */
+  /** 章节 / 知识点（选填自由文本）。 */
   chapter: string;
   /** 章节文本变化回调。 */
   onChapterChange: (text: string) => void;
 }
 
+/** 级联下拉的「全部」占位值（与真实维度值不冲突）。 */
+const ALL = '__all__';
+
 export function TextbookCascade({
+  options,
   versions,
   selectedVersionId,
   onSelectVersion,
   chapter,
   onChapterChange,
 }: TextbookCascadeProps): JSX.Element {
+  const [grade, setGrade] = useState<string>(ALL);
+  const [subject, setSubject] = useState<string>(ALL);
+  const [publisher, setPublisher] = useState<string>(ALL);
+  const [versionDim, setVersionDim] = useState<string>(ALL);
+
+  /** 按已选维度逐级过滤版本列表（层级间互相约束即为「级联」）。 */
+  const filtered = useMemo(
+    () =>
+      versions.filter(
+        (v) =>
+          (grade === ALL || v.grade === grade) &&
+          (subject === ALL || v.subject === subject) &&
+          (publisher === ALL || v.publisher === publisher) &&
+          (versionDim === ALL || v.version === versionDim),
+      ),
+    [versions, grade, subject, publisher, versionDim],
+  );
+
+  /**
+   * 上层维度变化后，清空其下方所有更细维度的选择，保证级联语义自洽。
+   *
+   * @param level 发生变化的层级（0=年级 1=学科 2=出版社）。
+   */
+  const resetLower = (level: number): void => {
+    if (level <= 0) setSubject(ALL);
+    if (level <= 1) setPublisher(ALL);
+    if (level <= 2) setVersionDim(ALL);
+  };
+
+  const selectSx = { minWidth: 116, bgcolor: '#fff' } as const;
+
   return (
     <Box
       sx={{
@@ -41,23 +79,108 @@ export function TextbookCascade({
         p: 1.75,
       }}
     >
-      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.5 }}>
         <MenuBookIcon sx={{ fontSize: 18, color: 'text.secondary' }} aria-hidden="true" />
         <Typography sx={{ fontSize: 14.5, fontWeight: 700 }}>绑定教材（选填）</Typography>
       </Stack>
 
+      <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mb: 1, lineHeight: 1.6 }}>
+        按 年级 → 学科 → 出版社 → 版本 逐级收窄，选中具体教材后生成时会检索并标注「待核对」。
+      </Typography>
+
+      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+        <TextField
+          select
+          size="small"
+          label="年级"
+          value={grade}
+          onChange={(e) => {
+            setGrade(e.target.value);
+            resetLower(0);
+          }}
+          sx={selectSx}
+        >
+          <MenuItem value={ALL}>全部</MenuItem>
+          {options.grades.map((g) => (
+            <MenuItem key={g} value={g}>
+              {g}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <TextField
+          select
+          size="small"
+          label="学科"
+          value={subject}
+          onChange={(e) => {
+            setSubject(e.target.value);
+            resetLower(1);
+          }}
+          sx={selectSx}
+        >
+          <MenuItem value={ALL}>全部</MenuItem>
+          {options.subjects.map((s) => (
+            <MenuItem key={s} value={s}>
+              {s}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <TextField
+          select
+          size="small"
+          label="出版社"
+          value={publisher}
+          onChange={(e) => {
+            setPublisher(e.target.value);
+            resetLower(2);
+          }}
+          sx={selectSx}
+        >
+          <MenuItem value={ALL}>全部</MenuItem>
+          {options.publishers.map((p) => (
+            <MenuItem key={p} value={p}>
+              {p}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        <TextField
+          select
+          size="small"
+          label="版本"
+          value={versionDim}
+          onChange={(e) => {
+            setVersionDim(e.target.value);
+          }}
+          sx={selectSx}
+        >
+          <MenuItem value={ALL}>全部</MenuItem>
+          {options.versions.map((v) => (
+            <MenuItem key={v} value={v}>
+              {v}
+            </MenuItem>
+          ))}
+        </TextField>
+      </Stack>
+
       {versions.length === 0 ? (
-        <Typography sx={{ fontSize: 13, color: 'text.secondary', lineHeight: 1.6 }}>
-          教材库将在后续版本（T07）上线，本批可直接跳过；生成结果仍可直接打印与分享。
+        <Typography sx={{ fontSize: 13, color: 'text.secondary', lineHeight: 1.6, mt: 1.25 }}>
+          暂无教材版本，可直接跳过；生成结果仍可直接打印与分享。
+        </Typography>
+      ) : filtered.length === 0 ? (
+        <Typography sx={{ fontSize: 13, color: 'text.secondary', lineHeight: 1.6, mt: 1.25 }}>
+          当前筛选条件下没有匹配的教材版本，试着放宽筛选维度。
         </Typography>
       ) : (
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-          {versions.map((v) => {
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1.25 }}>
+          {filtered.map((v) => {
             const selected = v.id === selectedVersionId;
             return (
               <Chip
                 key={v.id}
-                label={`${v.subject}·${v.grade}·${v.version}`}
+                label={`${v.grade}·${v.subject}·${v.version}${v.chapter ? `（${v.chapter}）` : ''}`}
                 color={selected ? 'primary' : 'default'}
                 variant={selected ? 'filled' : 'outlined'}
                 onClick={() => onSelectVersion(selected ? null : v.id)}

@@ -192,30 +192,7 @@ export function DocRunPage(): JSX.Element {
         ) : null}
       </Stack>
 
-      {/* 待核对提示 */}
-      {model.verifyHints && model.verifyHints.length > 0 ? (
-        <Box
-          sx={{
-            mt: 2,
-            p: 1.5,
-            borderRadius: 2,
-            border: '1px solid',
-            borderColor: 'warning.light',
-            bgcolor: 'rgba(245,158,11,0.08)',
-          }}
-        >
-          <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: 'warning.dark' }}>
-            待教师核对（AI 生成，请确认事实与数据）
-          </Typography>
-          <Box component="ul" sx={{ pl: 3, my: 0.5 }}>
-            {model.verifyHints.map((h, i) => (
-              <Typography component="li" key={i} sx={{ fontSize: 13, color: 'text.secondary' }}>
-                {h}
-              </Typography>
-            ))}
-          </Box>
-        </Box>
-      ) : null}
+      {/* 待核对项已由顶部 VerifyBanner 统一展示 */}
 
       {/* 正文（一份 DocModel → 三种呈现共用此渲染器） */}
       <Box sx={{ mt: 2.5 }}>
