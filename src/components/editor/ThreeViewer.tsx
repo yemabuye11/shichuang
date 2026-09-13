@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, FormControlLabel, Stack, Switch, Typography } from '@mui/material';
 import LayersIcon from '@mui/icons-material/Layers';
 import LabelIcon from '@mui/icons-material/Label';
-import type { SceneDescriptor } from '@/types/doc';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import type { SceneDescriptor, SceneKind } from '@/types/doc';
 
 /**
  * 3D 课件查看器（courseware_3d）。
@@ -14,6 +15,40 @@ import type { SceneDescriptor } from '@/types/doc';
  *
  * 本组件只负责「渲染一个 SceneDescriptor」，不关心来源（AI 生成 or 预置）。
  */
+/**
+ * 平台**真正能渲染**的 3D 场景类型。
+ *
+ * ⚠️ 硬约束（见 docs/QUALITY_BASELINE.md）：只保留 geometry（基础几何体）与
+ * molecule（球棍分子）两类真模型。`function` / `globe` / `circuit` / `biology` /
+ * `physics` / `custom` 目前**没有真实现**——历史上它们会退化成「蓝方块 + 4 个橙球」
+ * 或写死的 sin·cos 曲面，跟教学内容无关。
+ *
+ * 原则：**宁可少一个功能，不能给一个假的。** 遇到不支持的类型，
+ * {@link ThreeViewer} 会渲染诚实的说明卡片，绝不画占位模型糊弄教师。
+ */
+export const SUPPORTED_SCENE_KINDS: readonly SceneKind[] = ['geometry', 'molecule'] as const;
+
+/**
+ * 判断给定场景类型是否被平台真正支持渲染。
+ *
+ * @param kind 场景类型。
+ */
+export function isSceneKindSupported(kind: SceneKind | string | undefined | null): boolean {
+  return (SUPPORTED_SCENE_KINDS as readonly string[]).includes(String(kind ?? ''));
+}
+
+/** 3D 场景类型 → 中文名（用于不支持时的诚实提示）。 */
+const SCENE_KIND_LABEL: Record<string, string> = {
+  geometry: '几何体',
+  molecule: '分子结构',
+  function: '函数图像',
+  globe: '地球仪',
+  circuit: '电路',
+  biology: '生物结构',
+  physics: '物理装置',
+  custom: '自定义模型',
+};
+
 export interface ThreeViewerProps {
   /** 结构化 3D 场景描述。 */
   scene: SceneDescriptor;
@@ -200,9 +235,23 @@ export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Elem
 
   const heightNum = useMemo(() => (typeof height === 'number' ? height : 420), [height]);
 
+  /** 该场景类型是否**超出平台当前渲染能力**（几何体 / 分子 之外）。 */
+  const unsupported = !isSceneKindSupported(scene?.type);
+  /** 不支持类型的中文名（用于诚实提示，不让教师以为是自己的操作问题）。 */
+  const kindLabel = SCENE_KIND_LABEL[String(scene?.type ?? '')] ?? String(scene?.type ?? '未知类型');
+
   useEffect(() => {
     let disposed = false;
     let cleanup = (): void => {};
+
+    // 不支持的类型：直接跳过 three（747KB）加载，绝不画占位模型糊弄教师。
+    if (unsupported) {
+      setReady(false);
+      return () => {
+        disposed = true;
+        cleanup();
+      };
+    }
 
     void (async () => {
       try {
@@ -332,7 +381,50 @@ export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Elem
     };
     // 仅在场景描述或尺寸变化时重建
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene, heightNum]);
+  }, [scene, heightNum, unsupported]);
+
+  // ---- 不支持的 3D 类型：诚实说明，不渲染假模型 ----
+  if (unsupported) {
+    return (
+      <Box
+        sx={{
+          border: '1px dashed',
+          borderColor: 'warning.main',
+          bgcolor: '#FFF8E6',
+          borderRadius: 3,
+          px: 2.5,
+          py: 2,
+        }}
+      >
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.75 }}>
+          <InfoOutlinedIcon sx={{ fontSize: 18, color: '#9A6B00' }} aria-hidden="true" />
+          <Typography sx={{ fontSize: 15, fontWeight: 800, color: '#9A6B00' }}>
+            本节 3D（{kindLabel}）暂未支持，已为你保留完整文字讲解
+          </Typography>
+        </Stack>
+        <Typography sx={{ fontSize: 13.5, color: '#6B4E00', lineHeight: 1.75 }}>
+          平台的 3D 课件目前只支持<b>「几何体」</b>与<b>「分子结构」</b>两类真模型。
+          为了避免给一个跟课堂内容无关的空壳模型，这里不显示 3D。
+          <br />
+          上方可照常使用文字讲解备课；如需 3D，可换成立体图形或分子相关课题重新生成。
+        </Typography>
+        {scene?.annotations && scene.annotations.length > 0 ? (
+          <Box sx={{ mt: 1.25 }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#6B4E00', mb: 0.5 }}>
+              本节 3D 想说明的要点（供你口述或画在黑板上）：
+            </Typography>
+            <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+              {scene.annotations.map((a, i) => (
+                <li key={`anno-${i}`}>
+                  <Typography sx={{ fontSize: 13, color: '#6B4E00' }}>{a}</Typography>
+                </li>
+              ))}
+            </Box>
+          </Box>
+        ) : null}
+      </Box>
+    );
+  }
 
   return (
     <Box>

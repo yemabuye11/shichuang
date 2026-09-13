@@ -100,13 +100,19 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
 // T06 文档类（教案 / PPT / 课件2D / 课件3D / 办公文档）
 // ---------------------------------------------------------------------------
 
-/** 5 个文档类型的完整元数据（积分：教案1 / PPT2 / 课件2D 2 / 课件3D 3 / 办公文档1）。 */
+/**
+ * 5 个文档类型的完整元数据。
+ *
+ * ⚠️ `creditCost` 只是**网络异常 / mock 模式下的兜底展示值**，必须与迁移
+ * 0019（`app_type_profiles.credit_cost`）保持一致：教案 2 / PPT 3 / 课件2D 3 / 课件3D 4 / 办公 2。
+ * 真实计费与正常展示一律以服务端配置表（`estimate_cost` RPC）为准。
+ */
 export const DOC_TYPES: readonly AppTypeMeta[] = [
   {
     key: 'lesson_plan',
     label: '教案',
     hint: '教学目标/重难点/过程/作业，可打印',
-    creditCost: 1,
+    creditCost: 2,
     promptKey: 'doc_type:lesson_plan',
     sortOrder: 20,
   },
@@ -114,7 +120,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'ppt',
     label: 'PPT 课件',
     hint: '分页幻灯片 + 演讲者备注，可直接放映',
-    creditCost: 2,
+    creditCost: 3,
     promptKey: 'doc_type:ppt',
     sortOrder: 21,
   },
@@ -122,15 +128,15 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'courseware_2d',
     label: '课件（2D）',
     hint: '图文互动课件，边看边学',
-    creditCost: 2,
+    creditCost: 3,
     promptKey: 'doc_type:courseware_2d',
     sortOrder: 22,
   },
   {
     key: 'courseware_3d',
     label: '课件（3D）',
-    hint: '可旋转/拆解的 Three.js 3D 模型',
-    creditCost: 3,
+    hint: '可旋转/拆解的几何体与分子模型',
+    creditCost: 4,
     promptKey: 'doc_type:courseware_3d',
     sortOrder: 23,
   },
@@ -138,7 +144,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'office_doc',
     label: '办公文档',
     hint: '通知/计划/总结/发言稿等办公文案',
-    creditCost: 1,
+    creditCost: 2,
     promptKey: 'doc_type:office_doc',
     sortOrder: 24,
   },

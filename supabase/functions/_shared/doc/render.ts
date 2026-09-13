@@ -88,44 +88,50 @@ function renderSlides(slides: readonly Slide[]): string {
   return `<div class="slides">${pages}</div>`;
 }
 
-/** 渲染 3D 场景（内嵌 SceneDescriptor + 懒加载 three 骨架）。 */
+/**
+ * 渲染 3D 场景（**静态、诚实**的预览卡片，不引 three）。
+ *
+ * ⚠️ 历史问题（见 docs/QUALITY_BASELINE.md）：旧实现在这里 `import('/vendor/three.module.js')`
+ *    —— 该路径在产物里并不存在，导致教师打开分享页只看到一个黑色空框 + 「本页未内置
+ *    Three.js」。而 three 有 747KB，也不该为了一张静态预览把它塞进产物。
+ *
+ * 现在改为：直接渲染一张包含「场景标题 + 标注要点 + 平台查看指引」的静态卡片，
+ * 不加载任何外部资源、不假装能交互。交互版 3D 在平台内 `/d/:id` 由 ThreeViewer 渲染
+ * （且只支持 geometry / molecule 两类真模型，其余类型同样给诚实提示而非空壳模型）。
+ */
 function renderScene(scene: SceneDescriptor): string {
-  const json = JSON.stringify(scene);
+  const supported = scene.type === 'geometry' || scene.type === 'molecule';
+  const kindLabel: Record<string, string> = {
+    geometry: '几何体',
+    molecule: '分子结构',
+    function: '函数图像',
+    globe: '地球仪',
+    circuit: '电路',
+    biology: '生物结构',
+    physics: '物理装置',
+    custom: '自定义模型',
+  };
+  const label = kindLabel[String(scene.type ?? '')] ?? String(scene.type ?? '模型');
+  const head = supported
+    ? `3D ${label}（可交互版请在平台内打开）`
+    : `3D ${label}：本节暂未支持，已保留完整文字讲解`;
+  const notice = supported
+    ? '这是一个静态预览。可旋转 / 拆解的交互版请在平台内打开本文档查看。'
+    : '平台的 3D 课件目前只支持「几何体」与「分子结构」两类真模型。为避免给出与课堂内容无关的空壳模型，这里不显示 3D，请以上方文字讲解为准。';
+
+  const annos = (scene.annotations ?? []).length
+    ? `<ul class="scene-anno">${(scene.annotations ?? [])
+        .map((a) => `<li>${esc(a)}</li>`)
+        .join('')}</ul>`
+    : '';
+
   return (
-    `<div class="scene-wrap" data-scene='${esc(json)}'>` +
-    `<div class="scene-head">${esc(scene.title ?? '3D 互动模型')}</div>` +
-    `<div class="scene-canvas" id="scene-canvas">` +
-    `<div class="scene-fallback">正在加载 3D 查看器…（若长时间未加载，请用平台内置「3D 查看器」打开）</div>` +
-    `</div>` +
-    `<ul class="scene-anno">${(scene.annotations ?? []).map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` +
+    `<div class="scene-wrap${supported ? '' : ' scene-unsupported'}">` +
+    `<div class="scene-head">${head}</div>` +
+    `<div class="scene-card"><p class="scene-notice">${esc(notice)}</p>${annos}</div>` +
     `</div>`
   );
 }
-
-/** 3D 查看器的内联引导脚本（动态 import 同源 three，失败降级）。 */
-const SCENE_BOOTSTRAP = `
-<script type="module">
-(function () {
-  var wrap = document.querySelector('.scene-wrap');
-  if (!wrap) return;
-  var canvas = document.getElementById('scene-canvas');
-  var fallback = canvas ? canvas.querySelector('.scene-fallback') : null;
-  var scene = null;
-  try { scene = JSON.parse(wrap.getAttribute('data-scene') || 'null'); } catch (e) { scene = null; }
-  if (!scene) { if (fallback) fallback.textContent = '场景数据缺失'; return; }
-  // 懒加载同源 three（self-contained 骨架；真实渲染由平台 ThreeViewer 兜底）
-  import('/vendor/three.module.js')
-    .then(function (THREE) {
-      if (!fallback) return;
-      fallback.textContent = '已加载 Three.js，正在构建「' + (scene.title || '模型') + '」…';
-      // T08/T07 可在此接入完整渲染逻辑；当前仅占位渲染坐标轴提示
-      if (typeof THREE !== 'object') { if (fallback) fallback.textContent = 'Three.js 模块格式异常，请用平台 3D 查看器打开'; }
-    })
-    .catch(function () {
-      if (fallback) fallback.textContent = '本页未内置 Three.js，请用平台内置「3D 查看器」打开此课件。';
-    });
-})();
-</script>`;
 
 /**
  * 把 DocModel 渲染为自包含 Web HTML。
@@ -190,9 +196,14 @@ body{margin:0;padding:32px;color:var(--ink);background:var(--bg);
 .s-notes{margin-top:16px;color:var(--sub);font-size:13px;border-top:1px dashed var(--line);padding-top:10px;}
 .scene-wrap{margin:18px 0;border:1px solid var(--line);border-radius:12px;padding:16px;}
 .scene-head{font-weight:700;font-size:18px;margin-bottom:10px;}
-.scene-canvas{min-height:240px;display:flex;align-items:center;justify-content:center;
-  background:#0E1116;border-radius:10px;color:#9AA4B2;font-size:14px;text-align:center;}
+.scene-card{border-radius:10px;padding:14px 16px;background:#F7F9FC;border:1px dashed var(--line);}
+.scene-unsupported{border-color:#F2C14E;background:#FFFDF6;}
+.scene-unsupported .scene-head{color:#9A6B00;}
+.scene-unsupported .scene-card{background:#FFF8E6;border-color:#F2C14E;}
+.scene-notice{margin:0;font-size:14px;line-height:1.8;color:#4B5563;}
+.scene-unsupported .scene-notice{color:#6B4E00;}
 .scene-anno{margin:12px 0 0;padding-left:20px;color:var(--sub);font-size:14px;}
+.scene-anno li{margin:3px 0;}
 .verify{margin-top:28px;border:1px solid #F2C14E;background:#FFF8E6;border-radius:10px;padding:14px 18px;}
 .verify h3{margin:0 0 8px;font-size:16px;color:#9A6B00;}
 .verify ul{margin:0;padding-left:20px;}
@@ -213,7 +224,6 @@ body{margin:0;padding:32px;color:var(--ink);background:var(--bg);
 ${subtitleBits ? `<p class="doc-sub">${subtitleBits}</p>` : ''}
 ${body}
 </main>
-${model.kind === 'courseware_3d' ? SCENE_BOOTSTRAP : ''}
 </body>
 </html>`;
 

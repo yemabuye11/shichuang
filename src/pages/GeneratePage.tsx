@@ -70,18 +70,18 @@ export function GeneratePage(): JSX.Element {
   const balance = user?.account.balance ?? null;
 
   // ---- 生成前预估积分（P0-F2）----
+  // ⚠️ 文档类也必须走 `estimate_cost` RPC 读配置表：否则会显示 constants.ts 里的
+  //    兜底旧值，出现「页面显示 2 分、实际扣 3 分」这类信任事故（积分数值必须走配置表）。
   useEffect(() => {
     let alive = true;
-    if (category === 'doc' && docType) {
-      setEstimated(getDocTypeCost(docType));
-      return;
-    }
+    const type = category === 'doc' ? docType : appType;
+    if (!type) return;
     void (async () => {
       try {
-        const cost = await creditService.estimateCost(appType);
+        const cost = await creditService.estimateCost(type);
         if (alive) setEstimated(cost);
       } catch {
-        if (alive) setEstimated(getAppTypeCost(appType));
+        if (alive) setEstimated(category === 'doc' ? getDocTypeCost(docType) : getAppTypeCost(appType));
       }
     })();
     return () => {
