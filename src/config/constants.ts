@@ -20,13 +20,21 @@ export interface AppTypeMeta {
   readonly sortOrder: number;
 }
 
-/** 9 个应用类型（8 类 + 自动判断）的完整元数据。 */
+/**
+ * 9 个应用类型（8 类 + 自动判断）的完整元数据。
+ *
+ * ⚠️ `creditCost` 只是**网络异常 / mock 模式下的兜底展示值**，必须与迁移
+ * 0029（`app_type_profiles.credit_cost`）保持一致：
+ * 自动判断 2 / 教学动画 6 / 教育应用 4 / 教学游戏 6 / 互动课件 4 /
+ * 数据回收 4 / AI命题 2 / AI组题 2 / AI教案·大单元 2。
+ * 真实计费与正常展示一律以服务端配置表（`estimate_cost` RPC）为准。
+ */
 export const APP_TYPES: readonly AppTypeMeta[] = [
   {
     key: 'auto',
     label: '自动判断',
     hint: '交给 AI 判断最适合的形式',
-    creditCost: 1,
+    creditCost: 2,
     promptKey: '',
     sortOrder: 0,
   },
@@ -34,7 +42,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'teaching_animation',
     label: '教学动画',
     hint: '动画演示知识点，可播放/暂停/重播',
-    creditCost: 3,
+    creditCost: 6,
     promptKey: 'app_type:teaching_animation',
     sortOrder: 1,
   },
@@ -42,7 +50,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'edu_tool',
     label: '教育应用',
     hint: '口算练习、单词卡、随机点名等小工具',
-    creditCost: 2,
+    creditCost: 4,
     promptKey: 'app_type:edu_tool',
     sortOrder: 2,
   },
@@ -50,7 +58,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'teaching_game',
     label: '教学游戏',
     hint: '闯关、积分、排行榜，5 关以上',
-    creditCost: 3,
+    creditCost: 6,
     promptKey: 'app_type:teaching_game',
     sortOrder: 3,
   },
@@ -58,7 +66,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'interactive_courseware',
     label: '互动课件',
     hint: '分段讲解 + 每节小检测 + 目录跳转',
-    creditCost: 2,
+    creditCost: 4,
     promptKey: 'app_type:interactive_courseware',
     sortOrder: 4,
   },
@@ -66,7 +74,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'data_collection',
     label: '数据回收',
     hint: '表单/问卷，提交后本机展示结果',
-    creditCost: 2,
+    creditCost: 4,
     promptKey: 'app_type:data_collection',
     sortOrder: 5,
   },
@@ -74,7 +82,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'ai_item_generation',
     label: 'AI命题',
     hint: '一套 10 题，含答案与解析，可打印',
-    creditCost: 1,
+    creditCost: 2,
     promptKey: 'app_type:ai_item_generation',
     sortOrder: 6,
   },
@@ -82,7 +90,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'ai_paper_composition',
     label: 'AI组题',
     hint: '按知识点/难度/题型组卷，A4 打印友好',
-    creditCost: 1,
+    creditCost: 2,
     promptKey: 'app_type:ai_paper_composition',
     sortOrder: 7,
   },
@@ -90,7 +98,7 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
     key: 'ai_lesson_plan',
     label: 'AI教案·大单元',
     hint: '目标/重难点/过程/作业/板书，可打印',
-    creditCost: 1,
+    creditCost: 2,
     promptKey: 'app_type:ai_lesson_plan',
     sortOrder: 8,
   },
@@ -104,7 +112,8 @@ export const APP_TYPES: readonly AppTypeMeta[] = [
  * 5 个文档类型的完整元数据。
  *
  * ⚠️ `creditCost` 只是**网络异常 / mock 模式下的兜底展示值**，必须与迁移
- * 0019（`app_type_profiles.credit_cost`）保持一致：教案 2 / PPT 3 / 课件2D 3 / 课件3D 4 / 办公 2。
+ * 0029（`app_type_profiles.credit_cost`）保持一致：
+ * 教案 4 / PPT 6 / 课件2D 6 / 课件3D 8 / 办公文档 4。
  * 真实计费与正常展示一律以服务端配置表（`estimate_cost` RPC）为准。
  */
 export const DOC_TYPES: readonly AppTypeMeta[] = [
@@ -112,7 +121,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'lesson_plan',
     label: '教案',
     hint: '教学目标/重难点/过程/作业，可打印',
-    creditCost: 2,
+    creditCost: 4,
     promptKey: 'doc_type:lesson_plan',
     sortOrder: 20,
   },
@@ -120,7 +129,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'ppt',
     label: 'PPT 课件',
     hint: '分页幻灯片 + 演讲者备注，可直接放映',
-    creditCost: 3,
+    creditCost: 6,
     promptKey: 'doc_type:ppt',
     sortOrder: 21,
   },
@@ -128,7 +137,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'courseware_2d',
     label: '课件（2D）',
     hint: '图文互动课件，边看边学',
-    creditCost: 3,
+    creditCost: 6,
     promptKey: 'doc_type:courseware_2d',
     sortOrder: 22,
   },
@@ -136,7 +145,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'courseware_3d',
     label: '课件（3D）',
     hint: '可旋转/拆解的几何体与分子模型',
-    creditCost: 4,
+    creditCost: 8,
     promptKey: 'doc_type:courseware_3d',
     sortOrder: 23,
   },
@@ -144,7 +153,7 @@ export const DOC_TYPES: readonly AppTypeMeta[] = [
     key: 'office_doc',
     label: '办公文档',
     hint: '通知/计划/总结/发言稿等办公文案',
-    creditCost: 2,
+    creditCost: 4,
     promptKey: 'doc_type:office_doc',
     sortOrder: 24,
   },

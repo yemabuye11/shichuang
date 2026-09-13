@@ -192,15 +192,16 @@ export const DOC_TYPE_LABELS: Readonly<Record<DocType, string>> = {
 /**
  * 文档类型 → 默认积分成本。
  *
- * ⚠️ 必须与最新迁移保持一致：0012 曾为 1/2/2/3/1，**0019 已上调为 2/3/3/4/2**。
- * 这里只是兜底展示值，真实计费一律走 `app_type_profiles.credit_cost`（配置表）。
+ * ⚠️ 必须与最新迁移保持一致：0012 曾为 1/2/2/3/1，0019 上调为 2/3/3/4/2，
+ * **0029 再次翻倍为 4/6/6/8/4**。这里只是兜底展示值，
+ * 真实计费一律走 `app_type_profiles.credit_cost`（配置表）。
  */
 export const DOC_TYPE_COST: Readonly<Record<DocType, number>> = {
-  lesson_plan: 2,
-  ppt: 3,
-  courseware_2d: 3,
-  courseware_3d: 4,
-  office_doc: 2,
+  lesson_plan: 4,
+  ppt: 6,
+  courseware_2d: 6,
+  courseware_3d: 8,
+  office_doc: 4,
 };
 
 /** 是否为合法的文档类型。 */
