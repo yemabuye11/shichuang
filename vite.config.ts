@@ -57,7 +57,7 @@ export default defineConfig(({ mode }) => {
           short_name: brandName,
           description: '一句话，做出你的教学应用',
           lang: 'zh-CN',
-          start_url: '/',
+          start_url: './',
           scope: '/',
           display: 'standalone',
           orientation: 'portrait',
