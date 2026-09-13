@@ -3,6 +3,7 @@ import { Box, Button, Divider, Stack, Typography } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/Logout';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import PaidOutlinedIcon from '@mui/icons-material/PaidOutlined';
 import { useNavigate } from 'react-router-dom';
 import { CreditBoard } from '@/components/credit/CreditBoard';
 import { LedgerList } from '@/components/credit/LedgerList';
@@ -88,6 +89,20 @@ export function MePage(): JSX.Element {
           appCount={apps.length}
           onRedeem={() => setRedeemOpen(true)}
         />
+      </Box>
+
+      {/* ---- 充值入口 ---- */}
+      <Box sx={{ mt: 1.5 }}>
+        <Button
+          variant="outlined"
+          size="large"
+          fullWidth
+          startIcon={<PaidOutlinedIcon />}
+          onClick={() => navigate(ROUTES.RECHARGE)}
+          sx={{ minHeight: 48, borderRadius: 3, fontWeight: 700 }}
+        >
+          自助充值（扫码付款，管理员核对到账）
+        </Button>
       </Box>
 
       {/* ---- 我的应用 ---- */}

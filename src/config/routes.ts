@@ -24,6 +24,8 @@ export const ROUTES = {
   LOGIN: '/login',
   /** 管理员后台（需登录 + role='admin'）。 */
   ADMIN: '/admin',
+  /** 自助充值页（需登录，个人收款码 + 后台确认到账）。 */
+  RECHARGE: '/recharge',
   /** 文档运行页（公开，对应 apps.category='doc' 的网页链接）。 */
   DOC_RUN: '/d',
 } as const;

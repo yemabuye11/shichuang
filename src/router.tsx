@@ -27,6 +27,7 @@ const MePage = lazy(() => import('@/pages/MePage'));
 const MyAppsPage = lazy(() => import('@/pages/MyAppsPage'));
 const LoginPage = lazy(() => import('@/pages/LoginPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
+const RechargePage = lazy(() => import('@/pages/RechargePage'));
 
 /** 懒加载包裹器。 */
 function withSuspense(node: JSX.Element): JSX.Element {
@@ -67,6 +68,12 @@ export const router = createBrowserRouter([
         element: <RequireAuth>{withSuspense(<MyAppsPage />)}</RequireAuth>,
       },
       { path: 'login', element: withSuspense(<LoginPage />) },
+      {
+        path: 'recharge',
+        element: (
+          <RequireAuth>{withSuspense(<RechargePage />)}</RequireAuth>
+        ),
+      },
       {
         path: 'admin',
         element: (

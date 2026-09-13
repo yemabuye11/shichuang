@@ -36,7 +36,9 @@ export type LedgerReasonEnum =
   | 'generate_refund'
   | 'redeem_code'
   | 'admin_adjust'
-  | 'publish_reward';
+  | 'publish_reward'
+  | 'recharge_self'
+  | 'expire';
 export type RedemptionKindEnum = 'credit' | 'invite' | 'membership';
 export type RedemptionStatusEnum = 'unused' | 'used' | 'disabled';
 export type UserRoleEnum = 'user' | 'admin';
@@ -292,6 +294,35 @@ export type AdminReportRow = {
   created_at: string;
   total_count: number;
 };
+/** `recharge_requests` 表的一行。 */
+export type RechargeRequestRow = {
+  id: string;
+  user_id: string;
+  plan_id: string | null;
+  amount_cny: number;
+  pay_method: 'wechat' | 'alipay';
+  status: 'pending' | 'approved' | 'rejected';
+  proof_text: string | null;
+  proof_image_url: string | null;
+  created_at: string;
+  handled_by: string | null;
+  handled_at: string | null;
+};
+/** `admin_list_recharge()` 返回的一行。 */
+export type RechargeListRow = {
+  id: string;
+  user_id: string;
+  nickname: string;
+  plan_id: string | null;
+  plan_name: string | null;
+  amount_cny: number;
+  pay_method: string;
+  status: string;
+  proof_text: string | null;
+  proof_image_url: string | null;
+  created_at: string;
+  handled_at: string | null;
+};
 // ---------------------------------------------------------------------------
 // T07（迁移 0013 / 0014 / 0015）：教材版本与沉淀知识点表
 //   注意：status / source 用 check 约束（非 Postgres enum 类型），故行类型内联字面量联合。
@@ -356,6 +387,16 @@ export type Database = {
         Row: RedemptionCodeRow;
         Insert: Partial<RedemptionCodeRow> & { code: string };
         Update: Partial<RedemptionCodeRow>;
+        Relationships: [];
+      };
+      recharge_requests: {
+        Row: RechargeRequestRow;
+        Insert: Partial<RechargeRequestRow> & {
+          user_id: string;
+          amount_cny: number;
+          pay_method: 'wechat' | 'alipay';
+        };
+        Update: Partial<RechargeRequestRow>;
         Relationships: [];
       };
       apps: {
@@ -532,6 +573,13 @@ export type Database = {
         Returns: Json;
       };
       admin_set_plan_enabled: { Args: { p_id: string; p_enabled: boolean }; Returns: Json };
+      admin_set_system_config: { Args: { p_key: string; p_value: Json }; Returns: Json };
+      admin_approve_recharge: { Args: { p_id: string; p_ok: boolean }; Returns: Json };
+      admin_list_recharge: {
+        Args: { p_status?: string | null; p_limit?: number };
+        Returns: RechargeListRow[];
+      };
+      get_system_config: { Args: { p_key: string }; Returns: Json };
       admin_upsert_model: {
         Args: {
           p_id: string;

@@ -12,15 +12,19 @@ import { StatsPanel } from '@/components/admin/StatsPanel';
 import { CodeBatchForm } from '@/components/admin/CodeBatchForm';
 import { ReportList } from '@/components/admin/ReportList';
 import { UserList } from '@/components/admin/UserList';
+import { RechargeSettingsPanel } from '@/components/admin/RechargeSettingsPanel';
+import { RechargeRequestsPanel } from '@/components/admin/RechargeRequestsPanel';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
 import type { AdminStats, MembershipPlan, ReportItem } from '@/types/models';
 
 /**
- * 管理员后台（Q10 极简三功能 + 客户新增的「查看注册用户」）：
+ * 管理员后台（Q10 极简三功能 + 客户新增的「查看注册用户」「收款设置」「待充值」）：
  * - Tab「概览」：数据看板、批量生成兑换码、举报处理与下架；
- * - Tab「注册用户」：查看注册用户列表（邮箱 / 昵称 / 注册时间 / 积分余额 / 生成次数），仅管理员可见。
+ * - Tab「注册用户」：查看注册用户列表（邮箱 / 昵称 / 注册时间 / 积分余额 / 生成次数），仅管理员可见；
+ * - Tab「收款设置」：配置野马的个人微信 / 支付宝收款码 + 引导文案；
+ * - Tab「待充值」：核对老师提交的充值凭证，一键到账（走 admin_approve_recharge）。
  *
  * 整个页面处于 `RequireAuth requireAdmin` 路由守卫内，非管理员看不到任何入口。
  */
@@ -97,7 +101,7 @@ export function AdminPage(): JSX.Element {
         <Box>
           <Typography sx={{ fontSize: { xs: 21, sm: 24 }, fontWeight: 800 }}>管理员后台</Typography>
           <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 0.25 }}>
-            发兑换码 · 看数据 · 处理举报 · 查看用户
+            发兑换码 · 看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账
           </Typography>
         </Box>
       </Stack>
@@ -112,10 +116,14 @@ export function AdminPage(): JSX.Element {
       <Tabs
         value={tab}
         onChange={(_, v) => setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
         sx={{ mt: 2.5, borderBottom: '1px solid', borderColor: 'divider' }}
       >
         <Tab label="概览" />
         <Tab label="注册用户" />
+        <Tab label="收款设置" />
+        <Tab label="待充值" />
       </Tabs>
 
       {tab === 0 ? (
@@ -151,9 +159,17 @@ export function AdminPage(): JSX.Element {
             />
           </Stack>
         </>
-      ) : (
+      ) : tab === 1 ? (
         <Box sx={{ mt: 3 }}>
           <UserList onError={(msg) => setError(msg)} />
+        </Box>
+      ) : tab === 2 ? (
+        <Box sx={{ mt: 3 }}>
+          <RechargeSettingsPanel />
+        </Box>
+      ) : (
+        <Box sx={{ mt: 3 }}>
+          <RechargeRequestsPanel />
         </Box>
       )}
     </Box>

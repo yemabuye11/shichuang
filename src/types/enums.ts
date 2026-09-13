@@ -40,7 +40,8 @@ export type LedgerReason =
   | 'generate_refund'
   | 'redeem_code'
   | 'admin_adjust'
-  | 'publish_reward';
+  | 'publish_reward'
+  | 'recharge_self';
 
 /** 兑换码类型：积分码 / 邀请码 / 套餐码。 */
 export type RedemptionKind = 'credit' | 'invite' | 'membership';
@@ -84,6 +85,7 @@ export const LEDGER_REASON_VALUES: readonly LedgerReason[] = [
   'redeem_code',
   'admin_adjust',
   'publish_reward',
+  'recharge_self',
 ] as const;
 
 /**

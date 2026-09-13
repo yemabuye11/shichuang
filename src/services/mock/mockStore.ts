@@ -14,6 +14,33 @@ import type {
   UserMembership,
 } from '@/types/models';
 
+/** 收款码 + 引导文案（system_config 的 payment key，mock 占位）。 */
+export interface MockPaymentConfig {
+  wechatQrUrl: string;
+  alipayQrUrl: string;
+  tip: string;
+}
+
+/** 充值请求（mock 内存态）。 */
+export interface MockRechargeRequest {
+  id: string;
+  userId: string;
+  planId: string | null;
+  planName: string | null;
+  amountCny: number;
+  payMethod: 'wechat' | 'alipay';
+  status: 'pending' | 'approved' | 'rejected';
+  proofText: string | null;
+  proofImageUrl: string | null;
+  createdAt: string;
+  nickname: string | null;
+  handledAt: string | null;
+}
+
+/** 缺省引导文案（与后端种子保持一致）。 */
+const DEFAULT_PAYMENT_TIP =
+  '选套餐 → 扫下方码付款（备注你的账号名）→ 付款后点“我已付款”提交凭证 → 管理员核对后积分到账';
+
 /**
  * MOCK 模式的本地账本。
  *
@@ -42,6 +69,10 @@ export interface MockState {
   textbookVersions: TextbookVersion[];
   /** T07：本地教材知识点沉淀（mock 下供缓存命中与教师补写）。 */
   textbookKnowledge: TextbookKnowledge[];
+  /** 收款码配置（system_config.payment 的 mock 占位）。 */
+  paymentConfig: MockPaymentConfig;
+  /** 充值请求（老师端提交，后台确认，mock 内存闭环）。 */
+  rechargeRequests: MockRechargeRequest[];
 }
 
 function emptyState(): MockState {
@@ -56,6 +87,8 @@ function emptyState(): MockState {
     reports: [],
     textbookVersions: [],
     textbookKnowledge: [],
+    paymentConfig: { wechatQrUrl: '', alipayQrUrl: '', tip: DEFAULT_PAYMENT_TIP },
+    rechargeRequests: [],
     plans: [
       { id: 'free', name: '体验版', credits: 0, durationDays: 0, priceCny: 0, description: '注册即赠送', sortOrder: 0, enabled: true },
       { id: 'basic', name: '标准版', credits: 200, durationDays: 365, priceCny: 9.9, description: '适合一位老师一学年', sortOrder: 1, enabled: true },
@@ -540,4 +573,97 @@ export function depositTextbookKnowledge(
   state.textbookKnowledge = [k, ...state.textbookKnowledge];
   void persist();
   return k;
+}
+
+// ---------------------------------------------------------------------------
+// 收款码配置（system_config.payment 的 mock 占位）
+// ---------------------------------------------------------------------------
+
+/** 读取收款码配置（mock 占位，缺图返回空字符串）。 */
+export function getPaymentConfig(): MockPaymentConfig {
+  return { ...state.paymentConfig };
+}
+
+/** 保存收款码配置（mock 占位）。 */
+export async function setPaymentConfig(cfg: MockPaymentConfig): Promise<void> {
+  state.paymentConfig = { ...cfg };
+  await persist();
+}
+
+// ---------------------------------------------------------------------------
+// 充值请求（老师端提交 / 后台确认，mock 内存闭环保证演示可用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 老师端提交一条充值请求（mock 内存）。
+ *
+ * @param input 套餐 / 金额 / 付款方式 / 凭证。
+ */
+export async function addRechargeRequest(input: {
+  planId: string;
+  amountCny: number;
+  payMethod: 'wechat' | 'alipay';
+  proofText: string;
+  proofImageUrl: string | null;
+}): Promise<MockRechargeRequest> {
+  const now = new Date().toISOString();
+  const plan = state.plans.find((p) => p.id === input.planId);
+  const req: MockRechargeRequest = {
+    id: `mock-req-${nextId()}`,
+    userId: state.profile?.id ?? 'mock-user',
+    planId: input.planId,
+    planName: plan?.name ?? null,
+    amountCny: input.amountCny,
+    payMethod: input.payMethod,
+    status: 'pending',
+    proofText: input.proofText,
+    proofImageUrl: input.proofImageUrl,
+    createdAt: now,
+    nickname: state.profile?.nickname ?? '演示老师',
+    handledAt: null,
+  };
+  state.rechargeRequests = [req, ...state.rechargeRequests];
+  await persist();
+  return req;
+}
+
+/**
+ * 列出充值请求（mock 内存）。
+ *
+ * @param status 过滤状态；为空表示全部。
+ */
+export function listRechargeRequests(status: string | null = null): MockRechargeRequest[] {
+  const list = status
+    ? state.rechargeRequests.filter((r) => r.status === status)
+    : state.rechargeRequests;
+  return list.map((r) => ({ ...r }));
+}
+
+/**
+ * 管理员确认 / 拒绝一条充值请求（mock 内存）。
+ *
+ * 确认时按 plan 查 credits，调用 applyCredit 加积分，保证「提交→确认→积分到账」闭环。
+ *
+ * @param id 请求 ID。
+ * @param ok true=确认到账，false=拒绝。
+ */
+export async function approveRechargeRequest(id: string, ok: boolean): Promise<void> {
+  const req = state.rechargeRequests.find((r) => r.id === id);
+  if (!req) return;
+  if (ok) {
+    const plan = state.plans.find((p) => p.id === req.planId);
+    const delta = plan ? plan.credits : 0;
+    if (delta > 0) {
+      // 与真实 RPC 语义一致：reason='recharge_self', ref_type='recharge'
+      applyCredit(delta, 'recharge_self', '自助充值到账（管理员确认）', {
+        refType: 'recharge',
+        refId: id,
+      });
+    }
+    req.status = 'approved';
+  } else {
+    req.status = 'rejected';
+  }
+  req.handledAt = new Date().toISOString();
+  await persist();
 }

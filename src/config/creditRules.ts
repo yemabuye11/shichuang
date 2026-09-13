@@ -72,6 +72,8 @@ export const LEDGER_REASON_LABEL: Record<string, string> = {
   redeem_code: '兑换码充值',
   admin_adjust: '管理员调整',
   publish_reward: '发布应用奖励',
+  recharge_self: '自助充值到账',
+  expire: '体验积分过期',
 };
 
 /**
