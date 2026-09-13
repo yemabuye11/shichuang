@@ -274,8 +274,10 @@ export type AdminUserRow = {
   id: string;
   nickname: string;
   role: UserRoleEnum;
+  email: string | null;
   balance: number;
   plan_id: string | null;
+  generation_count: number;
   created_at: string;
   total_count: number;
 };

@@ -1,25 +1,33 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Box, Stack, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Stack,
+  Tab,
+  Tabs,
+  Typography,
+} from '@mui/material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import { StatsPanel } from '@/components/admin/StatsPanel';
 import { CodeBatchForm } from '@/components/admin/CodeBatchForm';
 import { ReportList } from '@/components/admin/ReportList';
+import { UserList } from '@/components/admin/UserList';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
 import type { AdminStats, MembershipPlan, ReportItem } from '@/types/models';
 
 /**
- * 管理员后台（Q10 极简三功能）：
- * 1. 批量生成兑换码并导出；
- * 2. 数据看板（用户数 / 应用数 / 今日生成 / 本月支出 / 各类型平均单次成本）；
- * 3. 举报处理与下架。
+ * 管理员后台（Q10 极简三功能 + 客户新增的「查看注册用户」）：
+ * - Tab「概览」：数据看板、批量生成兑换码、举报处理与下架；
+ * - Tab「注册用户」：查看注册用户列表（邮箱 / 昵称 / 注册时间 / 积分余额 / 生成次数），仅管理员可见。
  *
- * 入口受 `RequireAuth requireAdmin` 保护，非管理员看不到。
+ * 整个页面处于 `RequireAuth requireAdmin` 路由守卫内，非管理员看不到任何入口。
  */
 export function AdminPage(): JSX.Element {
   const toast = useToast();
 
+  const [tab, setTab] = useState(0);
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [reports, setReports] = useState<ReportItem[]>([]);
@@ -89,7 +97,7 @@ export function AdminPage(): JSX.Element {
         <Box>
           <Typography sx={{ fontSize: { xs: 21, sm: 24 }, fontWeight: 800 }}>管理员后台</Typography>
           <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 0.25 }}>
-            发兑换码 · 看数据 · 处理举报
+            发兑换码 · 看数据 · 处理举报 · 查看用户
           </Typography>
         </Box>
       </Stack>
@@ -101,32 +109,53 @@ export function AdminPage(): JSX.Element {
         </Alert>
       ) : null}
 
-      {error ? (
-        <Alert severity="error" sx={{ mt: 2.5 }} action={
-          <Box
-            component="button"
-            type="button"
-            onClick={() => void loadAll()}
-            style={{ border: 0, background: 'transparent', color: 'inherit', fontWeight: 700, cursor: 'pointer', minHeight: 36 }}
-          >
-            重试
-          </Box>
-        }>
-          {error}
-        </Alert>
-      ) : null}
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        sx={{ mt: 2.5, borderBottom: '1px solid', borderColor: 'divider' }}
+      >
+        <Tab label="概览" />
+        <Tab label="注册用户" />
+      </Tabs>
 
-      <Stack spacing={3} sx={{ mt: 3 }}>
-        <StatsPanel stats={stats} loading={loading} />
-        <CodeBatchForm plans={plans.map((p) => ({ id: p.id, name: p.name, credits: p.credits }))} />
-        <ReportList
-          items={reports}
-          loading={loading}
-          onHandle={(id) => void handleReport(id, 'handled')}
-          onDismiss={(id) => void handleReport(id, 'dismissed')}
-          onTakedown={(appId) => void handleTakedown(appId)}
-        />
-      </Stack>
+      {tab === 0 ? (
+        <>
+          {error ? (
+            <Alert
+              severity="error"
+              sx={{ mt: 2.5 }}
+              action={
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={() => void loadAll()}
+                  style={{ border: 0, background: 'transparent', color: 'inherit', fontWeight: 700, cursor: 'pointer', minHeight: 36 }}
+                >
+                  重试
+                </Box>
+              }
+            >
+              {error}
+            </Alert>
+          ) : null}
+
+          <Stack spacing={3} sx={{ mt: 3 }}>
+            <StatsPanel stats={stats} loading={loading} />
+            <CodeBatchForm plans={plans.map((p) => ({ id: p.id, name: p.name, credits: p.credits }))} />
+            <ReportList
+              items={reports}
+              loading={loading}
+              onHandle={(id) => void handleReport(id, 'handled')}
+              onDismiss={(id) => void handleReport(id, 'dismissed')}
+              onTakedown={(appId) => void handleTakedown(appId)}
+            />
+          </Stack>
+        </>
+      ) : (
+        <Box sx={{ mt: 3 }}>
+          <UserList onError={(msg) => setError(msg)} />
+        </Box>
+      )}
     </Box>
   );
 }

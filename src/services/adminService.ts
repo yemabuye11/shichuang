@@ -29,8 +29,10 @@ export interface AdminUserView {
   id: string;
   nickname: string;
   role: string;
+  email: string | null;
   balance: number;
   planId: string | null;
+  generationCount: number;
   createdAt: string;
 }
 
@@ -210,8 +212,10 @@ export async function listUsers(
             id: me.id,
             nickname: me.nickname,
             role: me.role,
+            email: null,
             balance: st.account.balance,
             planId: st.membership?.planId ?? null,
+            generationCount: 0,
             createdAt: me.createdAt,
           },
         ]
@@ -222,7 +226,7 @@ export async function listUsers(
   const { data, error } = await sb.rpc('admin_list_users', {
     p_q: q || null,
     p_offset: offset,
-    p_limit: limit,
+    p_limit: Math.min(Math.max(Math.round(limit), 1), 50),
   });
   if (error) throw new AppError('FORBIDDEN', error.message, error);
   const rows = (data ?? []) as Parameters<typeof toAdminUser>[0][];

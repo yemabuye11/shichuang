@@ -219,16 +219,20 @@ export function toAdminUser(row: AdminUserRow): {
   id: string;
   nickname: string;
   role: string;
+  email: string | null;
   balance: number;
   planId: string | null;
+  generationCount: number;
   createdAt: string;
 } {
   return {
     id: row.id,
     nickname: row.nickname ?? '老师',
     role: row.role ?? 'user',
+    email: row.email ?? null,
     balance: toInt(row.balance, 0),
     planId: row.plan_id,
+    generationCount: toInt(row.generation_count, 0),
     createdAt: row.created_at,
   };
 }
