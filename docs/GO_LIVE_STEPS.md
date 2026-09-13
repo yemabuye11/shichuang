@@ -101,6 +101,31 @@ git push -u origin main
 - [ ] 生成一份教案/PPT，是真内容非 mock
 - [ ] 生成应用后，未登录打开分享链接能看
 
+### 1.11 邮箱验证码（T11）部署步骤
+> 取代「注册必须填邀请码」的旧门槛：现在注册走「邮箱验证码」——先 `request-email-code` 拿码、再 `verify-email-code` 校验、最后 `supabase.auth.signUp` 时触发器查库确认（`public.email_verifications.consumed=true` 且在 30 分钟内）。这一步同时去掉了 `pgcrypto` 依赖（旧版 `digest()` 在扩展缺失时会报「Database error saving new user」且被 Supabase 吞掉），故该历史报错也会消失。
+
+1. **跑迁移（一次性，可重跑）**：Supabase → SQL Editor，粘贴执行 `supabase/migrations/0032_email_verification.sql`。它会建 `email_verifications` 表（RLS 故意关闭）、用 `create or replace` 重建 `handle_new_user()`（删邀请码校验 + 改用核心 PG `md5` 算 `avatar_seed`）、并把 `system_config` 的 `auth` 段改成只留 `password` 登录方式、关闭 `requireInviteCode`。
+2. **开发态测试（无需任何额外操作）**：本机/线上 Edge Function 若未配置阿里云邮件密钥，`sendEmail` 会进入 `DEV_MODE`，`request-email-code` 直接在响应里回显 `{ ok:true, dev:true, devCode:"123456" }`，前端把验证码展示出来即可走通完整注册流程，**无需真实邮件服务商**。
+3. **真实发信（让老师收到真邮件才需要）**：
+   - 在阿里云「邮件推送」控制台验证一个发信域名/地址（即下面的 `ALIYUN_DM_FROM`，如 `noreply@yourdomain.com`）；
+   - 项目根目录执行（命令里的 `supabase` 一律 `npx -y supabase`）：
+     ```bash
+     npx -y supabase secrets set ALIYUN_DM_ACCESS_KEY_ID=xxx ALIYUN_DM_ACCESS_KEY_SECRET=xxx ALIYUN_DM_FROM=noreply@yourdomain.com
+     ```
+     （`ALIYUN_DM_REGION` 默认 `cn-hangzhou`，一般不用改。）
+4. **部署 Edge Functions**：项目根目录执行：
+   ```bash
+   npx -y supabase functions deploy request-email-code
+   npx -y supabase functions deploy verify-email-code
+   # 顺带把既有函数一起重新部署，保持版本一致
+   npx -y supabase functions deploy generate
+   npx -y supabase functions deploy serve-app
+   npx -y supabase functions deploy track-view
+   ```
+5. **重推前端**：GitHub Actions 会在 push 后自动重建发布（`deploy.yml`），前端那边（注册页走邮箱验证码）一并上线即可。
+
+> ⚠️ 阿里云邮件推送的 `sendEmail` 实现在本环境**无法实测**（无 AK/SK）；`DEV_MODE` 回显保证了整条注册链路现在就能端到端验证。真实发送仅需按第 3 步填好 3 个 Secret 并在阿里云控制台验证发信域名。
+
 ---
 
 ## 2. 以后怎么更新（git push 流程）
