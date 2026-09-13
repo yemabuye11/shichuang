@@ -6,6 +6,7 @@ import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import type { DocBlock, DocModel, Slide } from '@/types/doc';
 import { ThreeViewer } from '@/components/editor/ThreeViewer';
 import { ChartBlockView } from '@/components/editor/ChartBlockView';
+import { BloomChip, PedagogySummary } from '@/components/editor/BloomChip';
 import { blocksToText } from '@/utils/geometryKernel';
 
 /**
@@ -36,6 +37,9 @@ export function DocRenderer({ model }: DocRendererProps): JSX.Element {
 
       {model.slides && model.slides.length > 0 ? <SlidesView slides={model.slides} /> : null}
 
+      {/* 认知层级汇总（教案顶部；无数据时不渲染） */}
+      <PedagogySummary model={model} />
+
       {model.blocks && model.blocks.length > 0 ? (
         <Stack spacing={1.5} sx={{ mt: model.slides ? 3 : 0 }}>
           {model.blocks.map((b) => (
@@ -47,16 +51,53 @@ export function DocRenderer({ model }: DocRendererProps): JSX.Element {
   );
 }
 
-/** 单块渲染。 */
+/** 单块渲染（外层负责认知层级 chip / 互动设计的附加展示）。 */
 function BlockView({ block }: { block: DocBlock }): JSX.Element {
+  const isHeading = block.type === 'heading';
+  const inner = renderBlockInner(block);
+  // 标题块已在标题行内渲染 chip；非标题块在块上方补一枚
+  const chip = block.bloom && !isHeading ? <BloomChip level={block.bloom} compact /> : null;
+  const interaction =
+    block.interaction && !isHeading ? (
+      <Typography sx={{ fontSize: 13, color: 'text.secondary', mt: 0.25, lineHeight: 1.7 }}>
+        互动设计：{block.interaction}
+      </Typography>
+    ) : null;
+
+  if (!chip && !interaction) return inner;
+  return (
+    <Box>
+      {chip ? <Box sx={{ mb: 0.5 }}>{chip}</Box> : null}
+      {inner}
+      {interaction}
+    </Box>
+  );
+}
+
+/** 单块内容渲染。 */
+function renderBlockInner(block: DocBlock): JSX.Element {
   switch (block.type) {
     case 'heading': {
       const level = block.level ?? 2;
       const variant = level <= 1 ? 'h5' : level === 2 ? 'h6' : 'subtitle1';
       return (
-        <Typography variant={variant} sx={{ fontWeight: 800, mt: level === 1 ? 1 : 0.5 }}>
-          {block.text}
-        </Typography>
+        <Box>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap', gap: 0.75 }}>
+            <Typography
+              variant={variant}
+              sx={{ fontWeight: 800, mt: level === 1 ? 1 : 0.5, mb: 0 }}
+            >
+              {block.text}
+            </Typography>
+            {/* 环节标题旁标注认知层级：一眼看出这节课是不是全是"背" */}
+            {block.bloom ? <BloomChip level={block.bloom} /> : null}
+          </Stack>
+          {block.interaction ? (
+            <Typography sx={{ fontSize: 13, color: 'text.secondary', mt: 0.25, lineHeight: 1.7 }}>
+              互动设计：{block.interaction}
+            </Typography>
+          ) : null}
+        </Box>
       );
     }
     case 'paragraph':

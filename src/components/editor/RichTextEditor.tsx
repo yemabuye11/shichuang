@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -24,7 +24,7 @@ import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import ImageIcon from '@mui/icons-material/Image';
 import TableChartIcon from '@mui/icons-material/TableChart';
 import LinkIcon from '@mui/icons-material/Link';
-import type { DocBlock } from '@/types/doc';
+import type { BloomLevel, DocBlock } from '@/types/doc';
 import { uid } from '@/utils/uid';
 
 /**
@@ -98,23 +98,71 @@ function blocksToHtml(blocks: readonly DocBlock[]): string {
   return parts.join('');
 }
 
+/**
+ * 块的「元数据索引」键：归一化文本。
+ *
+ * 背景：TipTap（ProseMirror）只保留 schema 里声明过的属性，
+ * 写在 HTML 上的 `data-bloom` 会被解析时丢弃，编辑往返会**静默丢掉认知层级**。
+ * 因此改为「按归一化文本匹配」回填——教师没改这一节，元数据就不丢。
+ */
+function metaKey(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** 一条块的认知层级 / 互动设计元数据。 */
+interface BlockMeta {
+  bloom?: BloomLevel;
+  interaction?: string;
+}
+
+/** 把块序列抽出「文本 → 元数据」索引，供编辑往返回填。 */
+function buildMetaIndex(blocks: readonly DocBlock[]): Map<string, BlockMeta> {
+  const map = new Map<string, BlockMeta>();
+  for (const b of blocks) {
+    if (!b.bloom && !b.interaction) continue;
+    const key = metaKey(b.text ?? (b.items ?? []).join(' ') ?? '');
+    if (!key) continue;
+    // 同一文本出现多次时保留首次（教学环节标题通常唯一）
+    if (!map.has(key)) map.set(key, { bloom: b.bloom, interaction: b.interaction });
+  }
+  return map;
+}
+
 /** 把 TipTap HTML 解析回 DocBlock 序列（顶层块逐一映射）。 */
-function htmlToBlocks(html: string): DocBlock[] {
+function htmlToBlocks(html: string, metaIndex: Map<string, BlockMeta> = new Map()): DocBlock[] {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const blocks: DocBlock[] = [];
+
+  /** 按文本回填认知层级 / 互动设计（教师未改动该节时保留）。 */
+  const metaOf = (text: string): BlockMeta => metaIndex.get(metaKey(text)) ?? {};
 
   const walk = (node: Element): void => {
     for (const child of Array.from(node.children)) {
       const tag = child.tagName.toLowerCase();
       if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4') {
-        blocks.push({ id: uid('b'), type: 'heading', level: Number(tag[1]), text: child.textContent ?? '' });
+        const text = child.textContent ?? '';
+        blocks.push({
+          id: uid('b'),
+          type: 'heading',
+          level: Number(tag[1]),
+          text,
+          ...metaOf(text),
+        });
       } else if (tag === 'p') {
-        blocks.push({ id: uid('b'), type: 'paragraph', text: child.textContent ?? '' });
+        const text = child.textContent ?? '';
+        blocks.push({ id: uid('b'), type: 'paragraph', text, ...metaOf(text) });
       } else if (tag === 'ul' || tag === 'ol') {
         const items = Array.from(child.querySelectorAll('li'))
           .map((li) => li.textContent ?? '')
           .filter((t) => t.trim().length > 0);
-        blocks.push({ id: uid('b'), type: 'list', ordered: tag === 'ol', items });
+        const joined = items.join(' ');
+        blocks.push({
+          id: uid('b'),
+          type: 'list',
+          ordered: tag === 'ol',
+          items,
+          ...metaOf(joined),
+        });
       } else if (tag === 'table') {
         const header = Array.from(child.querySelectorAll('thead th')).map((th) => th.textContent ?? '');
         const rows = Array.from(child.querySelectorAll('tbody tr')).map((tr) =>
@@ -133,7 +181,8 @@ function htmlToBlocks(html: string): DocBlock[] {
       } else if (tag === 'blockquote') {
         const ps = Array.from(child.querySelectorAll('p'));
         const caption = child.querySelector('p.caption')?.textContent ?? '';
-        blocks.push({ id: uid('b'), type: 'callout', text: ps[0]?.textContent ?? '', caption });
+        const text = ps[0]?.textContent ?? '';
+        blocks.push({ id: uid('b'), type: 'callout', text, caption, ...metaOf(text) });
       } else if (tag === 'img') {
         blocks.push({
           id: uid('b'),
@@ -168,6 +217,13 @@ export function RichTextEditor({ blocks, onChange }: RichTextEditorProps): JSX.E
   // 仅在挂载时计算一次初始 HTML（编辑中由 TipTap 内部状态持有）
   const initialHtml = useMemo(() => blocksToHtml(blocks), []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 认知层级 / 互动设计的回填索引：教师没改动的块，编辑往返不丢元数据
+  const metaIndex = useMemo(() => buildMetaIndex(blocks), [blocks]);
+  const metaIndexRef = useRef(metaIndex);
+  useEffect(() => {
+    metaIndexRef.current = metaIndex;
+  }, [metaIndex]);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3, 4] } }),
@@ -182,7 +238,7 @@ export function RichTextEditor({ blocks, onChange }: RichTextEditorProps): JSX.E
     content: initialHtml,
     immediatelyRender: false,
     onUpdate: ({ editor: ed }) => {
-      onChange(htmlToBlocks(ed.getHTML()));
+      onChange(htmlToBlocks(ed.getHTML(), metaIndexRef.current));
     },
   });
 

@@ -17,6 +17,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { useNavigate, useParams } from 'react-router-dom';
 import { VerifyBanner } from '@/components/editor/VerifyBanner';
+import { PedagogySummary } from '@/components/editor/BloomChip';
 import { ExportMenu } from '@/components/export/ExportMenu';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { EmptyState } from '@/components/common/EmptyState';
@@ -231,6 +232,11 @@ export function DocEditorPage(): JSX.Element {
       {/* 核对横幅（复用 T07） */}
       <Box sx={{ mt: 2 }}>
         <VerifyBanner model={model} />
+      </Box>
+
+      {/* 认知层级 + 高阶占比 + 互动设计汇总（编辑页同样可见，无数据时不渲染） */}
+      <Box sx={{ mt: 2 }}>
+        <PedagogySummary model={model} />
       </Box>
 
       {/* 课件 3D 预览（网页版可交互；PPTX 导出含静态提示） */}
