@@ -7,8 +7,9 @@
 -- ---------------------------------------------------------------------------
 
 -- a) 邮箱验证码表
---    RLS 故意关闭：只有 service_role 的 Edge Function 与 security definer 触发器会读它，
---    前端/匿名用户永不该碰这张表。
+--    RLS 必须开启（无策略 = 默认全拒绝）：前端/匿名用户访问不了；
+--    service_role（Edge Function）自动绕过 RLS 正常读写；
+--    security definer 触发器以表主身份执行，同样不受影响。
 create table if not exists public.email_verifications (
   email       text not null,
   code_hash   text not null,
@@ -22,6 +23,8 @@ create table if not exists public.email_verifications (
 
 create index if not exists email_verifications_email_idx
   on public.email_verifications (email, created_at desc);
+
+alter table public.email_verifications enable row level security;
 
 -- b) 重建注册触发器：去掉邀请码校验 + 去掉 pgcrypto
 --    签名（returns trigger）不变，故可用 create or replace，无需 ALTER TYPE、无需重建触发器。
