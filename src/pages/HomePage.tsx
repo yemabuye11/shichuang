@@ -18,6 +18,7 @@ import { ExampleChips } from '@/components/generate/ExampleChips';
 import { AppCard } from '@/components/square/AppCard';
 import { AiDisclaimer } from '@/components/common/AiDisclaimer';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
+import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import { useAuth } from '@/hooks/useAuth';
 import { loginPath, ROUTES } from '@/config/routes';
 import { DOC_TYPES, MIN_PROMPT_LENGTH } from '@/config/constants';
@@ -188,6 +189,8 @@ export function HomePage(): JSX.Element {
 
   return (
     <Box sx={{ py: { xs: 2, sm: 3 } }}>
+      <SystemNoticeBanner />
+
       {/* ================= Hero ================= */}
       <Box
         sx={{

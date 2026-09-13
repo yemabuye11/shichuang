@@ -14,6 +14,7 @@ import { ReportList } from '@/components/admin/ReportList';
 import { UserList } from '@/components/admin/UserList';
 import { RechargeSettingsPanel } from '@/components/admin/RechargeSettingsPanel';
 import { RechargeRequestsPanel } from '@/components/admin/RechargeRequestsPanel';
+import { NoticeSettingsPanel } from '@/components/admin/NoticeSettingsPanel';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
@@ -101,7 +102,7 @@ export function AdminPage(): JSX.Element {
         <Box>
           <Typography sx={{ fontSize: { xs: 21, sm: 24 }, fontWeight: 800 }}>管理员后台</Typography>
           <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 0.25 }}>
-            发兑换码 · 看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账
+            发兑换码 · 看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置
           </Typography>
         </Box>
       </Stack>
@@ -124,6 +125,7 @@ export function AdminPage(): JSX.Element {
         <Tab label="注册用户" />
         <Tab label="收款设置" />
         <Tab label="待充值" />
+        <Tab label="公告设置" />
       </Tabs>
 
       {tab === 0 ? (
@@ -167,9 +169,13 @@ export function AdminPage(): JSX.Element {
         <Box sx={{ mt: 3 }}>
           <RechargeSettingsPanel />
         </Box>
-      ) : (
+      ) : tab === 3 ? (
         <Box sx={{ mt: 3 }}>
           <RechargeRequestsPanel />
+        </Box>
+      ) : (
+        <Box sx={{ mt: 3 }}>
+          <NoticeSettingsPanel />
         </Box>
       )}
     </Box>

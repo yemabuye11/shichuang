@@ -10,6 +10,7 @@ import { LedgerList } from '@/components/credit/LedgerList';
 import { RedeemCodeDialog } from '@/components/credit/RedeemCodeDialog';
 import { EmptyState } from '@/components/common/EmptyState';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
+import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import { TypeChip } from '@/components/common/TypeChip';
 import { useAuth } from '@/hooks/useAuth';
 import { useCredits } from '@/hooks/useCredits';
@@ -40,6 +41,8 @@ export function MePage(): JSX.Element {
 
   return (
     <Box sx={{ py: { xs: 2, sm: 3 }, maxWidth: 720, mx: 'auto' }}>
+      <SystemNoticeBanner />
+
       {/* ---- 用户信息 ---- */}
       <Stack direction="row" spacing={1.5} alignItems="center">
         <Box

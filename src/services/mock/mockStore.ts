@@ -73,6 +73,14 @@ export interface MockState {
   paymentConfig: MockPaymentConfig;
   /** 充值请求（老师端提交，后台确认，mock 内存闭环）。 */
   rechargeRequests: MockRechargeRequest[];
+  /** 系统公告 + 管理员微信号（system_config.system_notice 的 mock 占位）。 */
+  systemNotice: {
+    enabled: boolean;
+    title: string;
+    content: string;
+    wechat_id: string;
+    updated_at: string;
+  };
 }
 
 function emptyState(): MockState {
@@ -89,6 +97,13 @@ function emptyState(): MockState {
     textbookKnowledge: [],
     paymentConfig: { wechatQrUrl: '', alipayQrUrl: '', tip: DEFAULT_PAYMENT_TIP },
     rechargeRequests: [],
+    systemNotice: {
+      enabled: true,
+      title: '充值后请加管理员微信',
+      content: '充值或使用中遇到问题，可加管理员微信一对一咨询。',
+      wechat_id: 'yemabuye_001',
+      updated_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+    },
     plans: [
       { id: 'free', name: '体验版', credits: 0, durationDays: 0, priceCny: 0, description: '注册即赠送', sortOrder: 0, enabled: true },
       { id: 'basic', name: '标准版', credits: 200, durationDays: 365, priceCny: 9.9, description: '适合一位老师一学年', sortOrder: 1, enabled: true },
@@ -665,5 +680,43 @@ export async function approveRechargeRequest(id: string, ok: boolean): Promise<v
     req.status = 'rejected';
   }
   req.handledAt = new Date().toISOString();
+  await persist();
+}
+
+// ---------------------------------------------------------------------------
+// 系统公告（system_config.system_notice 的 mock 占位）
+// ---------------------------------------------------------------------------
+
+/**
+ * 读取系统公告（mock 占位）。
+ */
+export function getSystemNotice(): {
+  enabled: boolean;
+  title: string;
+  content: string;
+  wechat_id: string;
+  updated_at: string;
+} {
+  return { ...state.systemNotice };
+}
+
+/**
+ * 保存系统公告（mock 占位，自动更新 updated_at）。
+ *
+ * @param notice 公告字段。
+ */
+export async function setSystemNotice(notice: {
+  enabled: boolean;
+  title: string;
+  content: string;
+  wechat_id: string;
+}): Promise<void> {
+  state.systemNotice = {
+    enabled: notice.enabled,
+    title: notice.title.trim(),
+    content: notice.content.trim(),
+    wechat_id: notice.wechat_id.trim(),
+    updated_at: new Date().toISOString(),
+  };
   await persist();
 }

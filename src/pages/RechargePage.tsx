@@ -18,10 +18,15 @@ import PaidOutlinedIcon from '@mui/icons-material/PaidOutlined';
 import { useToast } from '@/components/common/ToastHost';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { EmptyState } from '@/components/common/EmptyState';
+import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import * as rechargeService from '@/services/rechargeService';
+import * as noticeService from '@/services/noticeService';
 import type { PaymentConfig, RechargeRequest } from '@/services/rechargeService';
+import type { SystemNotice } from '@/services/noticeService';
 import type { MembershipPlan } from '@/types/models';
 import { formatCny } from '@/utils/format';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 
 /**
  * 老师端自助充值页（野马个人收款码）。
@@ -40,6 +45,7 @@ export function RechargePage(): JSX.Element {
 
   const [cfg, setCfg] = useState<PaymentConfig | null>(null);
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
+  const [notice, setNotice] = useState<SystemNotice | null>(null);
   const [recentRequests, setRecentRequests] = useState<RechargeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -54,14 +60,16 @@ export function RechargePage(): JSX.Element {
     setLoading(true);
     setError('');
     try {
-      const [c, p, mine] = await Promise.all([
+      const [c, p, mine, n] = await Promise.all([
         rechargeService.getPaymentConfig(),
         rechargeService.listPlans(),
         rechargeService.listMyRequests().catch(() => [] as RechargeRequest[]),
+        noticeService.getSystemNotice().catch(() => null),
       ]);
       setCfg(c);
       setPlans(p);
       setRecentRequests(mine);
+      setNotice(n);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败，请稍后重试');
     } finally {
@@ -126,6 +134,8 @@ export function RechargePage(): JSX.Element {
 
   return (
     <Box sx={{ py: { xs: 2, sm: 3 }, maxWidth: 820, mx: 'auto' }}>
+      <SystemNoticeBanner />
+
       {/* ---- 顶部引导 ---- */}
       <Stack direction="row" alignItems="center" spacing={1.25}>
         <PaidOutlinedIcon color="primary" sx={{ fontSize: 30 }} aria-hidden="true" />
@@ -210,6 +220,9 @@ export function RechargePage(): JSX.Element {
           </Box>
         )}
       </Box>
+
+      {/* ---- 加管理员微信确认 ---- */}
+      <WechatConfirmBlock notice={notice} onToast={(msg) => toast.success(msg)} />
 
       {/* ---- 我已付款 表单 ---- */}
       <Box sx={{ mt: 3, p: 2.5, borderRadius: 3, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
@@ -322,6 +335,80 @@ function QrCard({ label, url }: { label: string; url: string }): JSX.Element {
         sx={{ width: '100%', maxWidth: 220, aspectRatio: '1 / 1', objectFit: 'contain', borderRadius: 1.5 }}
       />
       <Typography sx={{ fontSize: 14, fontWeight: 700, mt: 1 }}>{label}</Typography>
+    </Box>
+  );
+}
+
+/**
+ * 「加管理员微信确认」区块：来自 system_config.system_notice.wechat_id，
+ * 老师付完款后顺手加一下管理员发截图，能让管理员更快核对到账。
+ */
+function WechatConfirmBlock({
+  notice,
+  onToast,
+}: {
+  notice: SystemNotice | null;
+  onToast: (msg: string) => void;
+}): JSX.Element | null {
+  if (!notice?.wechat_id) return null;
+
+  const handleCopy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(notice.wechat_id);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = notice.wechat_id;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+    onToast('已复制微信号');
+  };
+
+  return (
+    <Box
+      sx={{
+        mt: 3,
+        p: { xs: 2, sm: 2.5 },
+        borderRadius: 3,
+        bgcolor: 'rgba(7,193,96,0.06)',
+        border: '1px solid rgba(7,193,96,0.24)',
+      }}
+    >
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
+        <ChatBubbleOutlineIcon sx={{ color: '#07c160', fontSize: 20 }} aria-hidden="true" />
+        <Typography sx={{ fontSize: 15.5, fontWeight: 800, color: '#07a050' }}>
+          付款后请加管理员微信发截图
+        </Typography>
+      </Stack>
+      <Typography sx={{ fontSize: 13.5, color: 'text.secondary', lineHeight: 1.7, mb: 1.5 }}>
+        付款后请加管理员微信发送付款截图，管理员核对后立即到账；不发送截图可能影响核对速度。
+      </Typography>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
+        <Chip
+          label={notice.wechat_id}
+          sx={{
+            fontWeight: 700,
+            bgcolor: '#07c160',
+            color: '#fff',
+            fontSize: 14,
+            height: 32,
+            '& .MuiChip-label': { px: 1.5 },
+          }}
+        />
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<ContentCopyIcon fontSize="small" />}
+          onClick={() => void handleCopy()}
+          sx={{ minHeight: 36, fontWeight: 600, color: '#07a050', borderColor: 'rgba(7,193,96,0.4)' }}
+        >
+          复制微信号
+        </Button>
+      </Stack>
     </Box>
   );
 }

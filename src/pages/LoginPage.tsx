@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PasswordForm } from '@/components/auth/PasswordForm';
 import { InviteCodeForm } from '@/components/auth/InviteCodeForm';
 import { PhoneForm } from '@/components/auth/PhoneForm';
+import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import { useAuth } from '@/hooks/useAuth';
 import { BRAND } from '@/config/brand';
 import { ROUTES } from '@/config/routes';
@@ -61,6 +62,8 @@ export function LoginPage(): JSX.Element {
 
   return (
     <Box sx={{ py: { xs: 3, sm: 6 }, maxWidth: 420, mx: 'auto' }}>
+      <SystemNoticeBanner />
+
       <Stack spacing={1} alignItems="center" textAlign="center">
         <Typography sx={{ fontSize: { xs: 24, sm: 28 }, fontWeight: 800 }}>登录 {brand.name}</Typography>
         <Typography sx={{ fontSize: 15, color: 'text.secondary', lineHeight: 1.7 }}>
