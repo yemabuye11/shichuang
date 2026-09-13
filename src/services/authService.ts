@@ -88,13 +88,35 @@ export async function signUp(id: AuthProviderId, payload: AuthPayload): Promise<
   }
 }
 
+/**
+ * 取出 Edge Function 返回的真实错误文案。
+ *
+ * `functions.invoke` 在非 2xx 时只给一句通用的
+ * "Edge Function returned a non-2xx status code"，真正的中文提示
+ * （如「验证码发送太频繁，请稍后再试」）藏在 `error.context`（原始 Response）里。
+ * 这里把它解析出来，避免用户在页面上只看到一句没用的英文。
+ */
+async function edgeErrorMessage(error: unknown, fallback: string): Promise<string> {
+  const res = (error as { context?: Response } | null)?.context;
+  try {
+    if (res && typeof res.json === 'function') {
+      const body = (await res.json()) as { message?: string };
+      if (body?.message) return body.message;
+    }
+  } catch {
+    /* 解析失败就用兜底文案 */
+  }
+  const msg = (error as { message?: string } | null)?.message;
+  return msg && !/non-2xx/i.test(msg) ? msg : fallback;
+}
+
 /** 请求向指定邮箱发送 6 位验证码（注册前置校验）。 */
 export async function requestEmailCode(email: string): Promise<{ dev?: boolean; devCode?: string }> {
   if (isMockMode()) return {};
   const sb = getSupabase();
   if (!sb) throw new AppError('NETWORK', '还没有连接云端服务');
   const { data, error } = await sb.functions.invoke('request-email-code', { body: { email: email.trim().toLowerCase() } });
-  if (error) throw new AppError('UNKNOWN', error.message, error);
+  if (error) throw new AppError('UNKNOWN', await edgeErrorMessage(error, '验证码发送失败，请稍后再试'), error);
   return (data ?? {}) as { dev?: boolean; devCode?: string };
 }
 
@@ -104,7 +126,7 @@ export async function verifyEmailCode(email: string, code: string): Promise<void
   const sb = getSupabase();
   if (!sb) throw new AppError('NETWORK', '还没有连接云端服务');
   const { error } = await sb.functions.invoke('verify-email-code', { body: { email: email.trim().toLowerCase(), code } });
-  if (error) throw new AppError('CODE_INVALID', error.message, error);
+  if (error) throw new AppError('CODE_INVALID', await edgeErrorMessage(error, '验证码不正确或已过期'), error);
 }
 
 /** 退出登录。 */

@@ -82,7 +82,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
       .eq('ip', ip).gt('created_at', since),
   ]);
 
-  if ((byEmail.count ?? 0) >= 5 || (byIp.count ?? 0) >= 3) {
+  // 限流：单邮箱 1h ≤ 5 次（防单人换邮箱薅积分的主要手段）
+  //      单 IP 1h ≤ 30 次 —— 原来是 3 次，但学校/教研组都走同一个公网 IP（NAT），
+  //      3 次会导致一个办公室一小时内只能注册 3 个人，直接卡死试点推广。
+  //      真正挡薅羊毛的是「单邮箱 5 次」，IP 限流只需拦住脚本批量刷，30 次足够。
+  if ((byEmail.count ?? 0) >= 5 || (byIp.count ?? 0) >= 30) {
     return jsonError(429, { code: 'RATE_LIMIT', message: '验证码发送太频繁，请稍后再试' });
   }
 
