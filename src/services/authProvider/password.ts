@@ -7,8 +7,8 @@ import type { AuthPayload, AuthProvider, AuthResult, PasswordSignInPayload, Pass
 /**
  * 邮箱 + 密码登录（Supabase Auth 原生，零成本）。
  *
- * P0 说明：不做强制邮箱验证（靠邀请码防薅），注册所需的用户元数据
- * 通过 `options.data` 传给 `handle_new_user()` 触发器校验邀请码。
+ * P0 说明：注册走「邮箱验证码」两步校验，注册所需的用户元数据
+ * 通过 `options.data` 传给 `handle_new_user()` 触发器校验邮箱验证状态。
  */
 export const passwordProvider: AuthProvider = {
   id: 'password',
@@ -50,9 +50,6 @@ export const passwordProvider: AuthProvider = {
     if (p.password.length < 8) {
       throw new AppError('VALIDATE_FAILED', '密码至少 8 位，方便的话用「学科+手机号后 6 位」');
     }
-    if (!p.inviteCode) {
-      throw new AppError('INVITE_REQUIRED', '注册需要填写邀请码');
-    }
 
     if (isMockMode()) {
       await mockStore.load();
@@ -70,7 +67,7 @@ export const passwordProvider: AuthProvider = {
       options: {
         data: {
           nickname: p.nickname || p.email.split('@')[0] || '老师',
-          invite_code: p.inviteCode.trim().toUpperCase(),
+          email_verified: p.emailVerified === true,
           subject: p.subject ?? '',
           grade: p.grade ?? '',
           school: p.school ?? '',
@@ -82,6 +79,9 @@ export const passwordProvider: AuthProvider = {
       // 触发器的中文异常会原样透传，优先展示给教师
       const raw = error.message ?? '';
       if (raw.includes('邀请码') || raw.includes('注册需要')) {
+        throw new AppError('INVITE_INVALID', raw, error);
+      }
+      if (raw.includes('邮箱验证') || raw.includes('请先完成邮箱验证')) {
         throw new AppError('INVITE_INVALID', raw, error);
       }
       if (raw.includes('already registered') || raw.includes('已注册')) {

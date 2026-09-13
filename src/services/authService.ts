@@ -1,7 +1,6 @@
 import { getSupabase } from './supabaseClient';
 import { AppError, codeFromMessage } from './http/errors';
 import { passwordProvider } from './authProvider/password';
-import { inviteProvider } from './authProvider/invite';
 import { phoneProvider } from './authProvider/phone';
 import { wechatProvider } from './authProvider/wechat';
 import { getPublicConfig } from './systemConfigService';
@@ -17,14 +16,13 @@ import * as mockStore from './mock/mockStore';
  *
  * 设计要点：
  * - Provider 按 `system_config.auth.providers` 动态注册，开关只改配置；
- * - P0 默认 `password` + `invite`；`phone` / `wechat` 已建文件并在调用时抛「暂未启用」；
+ * - P0 默认 `password`（注册走邮箱验证码两步校验）；`phone` / `wechat` 已建文件并在调用时抛「暂未启用」；
  * - MOCK 模式（未配置 Supabase）下走本地账本，保证主链路可演示。
  */
 
 /** 全部已实现的 Provider（顺序即 UI 展示顺序）。 */
 const ALL_PROVIDERS: readonly AuthProvider[] = [
   passwordProvider,
-  inviteProvider,
   phoneProvider,
   wechatProvider,
 ];
@@ -35,7 +33,7 @@ const ALL_PROVIDERS: readonly AuthProvider[] = [
  * @returns 已实现的全部 Provider（`enabled` 由配置决定）。
  */
 export async function getProviders(): Promise<AuthProvider[]> {
-  let enabledIds: string[] = ['password', 'invite'];
+  let enabledIds: string[] = ['password'];
   try {
     const cfg = await getPublicConfig();
     if (cfg.auth.providers.length > 0) enabledIds = cfg.auth.providers;
@@ -88,6 +86,25 @@ export async function signUp(id: AuthProviderId, payload: AuthPayload): Promise<
   } catch (err) {
     throw normalize(err);
   }
+}
+
+/** 请求向指定邮箱发送 6 位验证码（注册前置校验）。 */
+export async function requestEmailCode(email: string): Promise<{ dev?: boolean; devCode?: string }> {
+  if (isMockMode()) return {};
+  const sb = getSupabase();
+  if (!sb) throw new AppError('NETWORK', '还没有连接云端服务');
+  const { data, error } = await sb.functions.invoke('request-email-code', { body: { email: email.trim().toLowerCase() } });
+  if (error) throw new AppError('UNKNOWN', error.message, error);
+  return (data ?? {}) as { dev?: boolean; devCode?: string };
+}
+
+/** 校验指定邮箱的 6 位验证码（注册前置校验）。 */
+export async function verifyEmailCode(email: string, code: string): Promise<void> {
+  if (isMockMode()) return;
+  const sb = getSupabase();
+  if (!sb) throw new AppError('NETWORK', '还没有连接云端服务');
+  const { error } = await sb.functions.invoke('verify-email-code', { body: { email: email.trim().toLowerCase(), code } });
+  if (error) throw new AppError('CODE_INVALID', error.message, error);
 }
 
 /** 退出登录。 */
@@ -225,6 +242,8 @@ export const authService = {
   getEnabledProviders,
   signIn,
   signUp,
+  requestEmailCode,
+  verifyEmailCode,
   signOut,
   getCurrentUser,
   updateProfile,

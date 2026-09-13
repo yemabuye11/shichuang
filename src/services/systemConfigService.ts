@@ -25,7 +25,6 @@ export interface PublicConfig {
   brand: Partial<BrandConfig>;
   auth: {
     providers: string[];
-    requireInviteCode: boolean;
     requireEmailConfirm: boolean;
   };
   credit: {
@@ -49,7 +48,7 @@ let cache: { value: PublicConfig; at: number } | null = null;
 function fallbackConfig(): PublicConfig {
   return {
     brand: {},
-    auth: { providers: ['password', 'invite'], requireInviteCode: true, requireEmailConfirm: false },
+    auth: { providers: ['password'], requireEmailConfirm: false },
     credit: { registerGift: REGISTER_GIFT, publishReward: 2, dailyGenerationLimit: DAILY_GENERATION_LIMIT },
     square: { pageSize: SQUARE_PAGE_SIZE, publicBrowsable: true },
     appTypes: APP_TYPES.map((t) => ({
@@ -100,8 +99,7 @@ export async function getPublicConfig(force = false): Promise<PublicConfig> {
       domain: typeof brand.domain === 'string' ? brand.domain : undefined,
     },
     auth: {
-      providers: Array.isArray(auth.providers) ? (auth.providers as string[]) : ['password', 'invite'],
-      requireInviteCode: auth.requireInviteCode !== false,
+      providers: Array.isArray(auth.providers) ? (auth.providers as string[]) : ['password'],
       requireEmailConfirm: auth.requireEmailConfirm === true,
     },
     credit: {

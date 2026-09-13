@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Box, Button, Stack, Typography } from '@mui/material';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PasswordForm } from '@/components/auth/PasswordForm';
-import { InviteCodeForm } from '@/components/auth/InviteCodeForm';
 import { PhoneForm } from '@/components/auth/PhoneForm';
 import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import { useAuth } from '@/hooks/useAuth';
@@ -16,14 +15,14 @@ import type { AuthProviderId } from '@/services/authProvider/types';
 /**
  * 登录页（`?redirect=` 登录后回跳）。
  *
- * Tab 由 `system_config.auth.providers` 决定，P0 为「邮箱 + 密码」与「邀请码注册」。
+ * Tab 由 `system_config.auth.providers` 决定，P0 仅「邮箱 + 密码」（注册走邮箱验证码两步校验）。
  */
 export function LoginPage(): JSX.Element {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { user, refresh, brand } = useAuth();
 
-  const [providers, setProviders] = useState<string[]>(['password', 'invite']);
+  const [providers, setProviders] = useState<string[]>(['password']);
   const [active, setActive] = useState<AuthProviderId>('password');
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
 
@@ -55,7 +54,6 @@ export function LoginPage(): JSX.Element {
   const tabs = (
     [
       { id: 'password', label: '邮箱 + 密码' },
-      { id: 'invite', label: '邀请码注册' },
       { id: 'phone', label: '手机号' },
     ] as { id: AuthProviderId; label: string }[]
   ).filter((t) => providers.includes(t.id));
@@ -128,12 +126,6 @@ export function LoginPage(): JSX.Element {
       <Box sx={{ mt: 2.5 }}>
         {active === 'password' ? (
           <PasswordForm mode={mode} onModeChange={setMode} onSuccess={() => void handleSuccess()} />
-        ) : null}
-        {active === 'invite' ? (
-          <InviteCodeForm
-            onSuccess={() => void handleSuccess()}
-            onSwitch={() => setActive('password')}
-          />
         ) : null}
         {active === 'phone' ? <PhoneForm onSwitch={() => setActive('password')} /> : null}
       </Box>

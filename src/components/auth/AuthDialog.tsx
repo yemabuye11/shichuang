@@ -11,7 +11,6 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { PasswordForm } from './PasswordForm';
-import { InviteCodeForm } from './InviteCodeForm';
 import { PhoneForm } from './PhoneForm';
 import * as authService from '@/services/authService';
 import { BRAND } from '@/config/brand';
@@ -21,7 +20,8 @@ import type { AuthProviderId } from '@/services/authProvider/types';
  * 登录 / 注册弹窗。
  *
  * Tab 由 `system_config.auth.providers` 决定（ARCHITECTURE.md §3.6 Q2）：
- * 改配置即可增减登录方式，**不需要改这里的结构**。
+ * 改配置即可增减登录方式，**不需要改这里的结构**。P0 仅「邮箱 + 密码」
+ * （注册走邮箱验证码两步校验），不再展示邀请码。
  */
 export interface AuthDialogProps {
   open: boolean;
@@ -33,10 +33,9 @@ export interface AuthDialogProps {
 }
 
 export function AuthDialog({ open, onClose, onSuccess, defaultProvider }: AuthDialogProps): JSX.Element {
-  const [providers, setProviders] = useState<string[]>(['password', 'invite']);
+  const [providers, setProviders] = useState<string[]>(['password']);
   const [active, setActive] = useState<AuthProviderId>(defaultProvider ?? 'password');
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [requireInviteCode, setRequireInviteCode] = useState(true);
 
   useEffect(() => {
     if (!open) return;
@@ -52,18 +51,6 @@ export function AuthDialog({ open, onClose, onSuccess, defaultProvider }: AuthDi
     })();
   }, [open]);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const { getPublicConfig } = await import('@/services/systemConfigService');
-        const cfg = await getPublicConfig();
-        setRequireInviteCode(cfg.auth.requireInviteCode);
-      } catch {
-        setRequireInviteCode(true);
-      }
-    })();
-  }, [open]);
-
   const handleSuccess = (): void => {
     onSuccess();
     onClose();
@@ -72,7 +59,6 @@ export function AuthDialog({ open, onClose, onSuccess, defaultProvider }: AuthDi
   const tabs = (
     [
       { id: 'password', label: '邮箱 + 密码' },
-      { id: 'invite', label: '邀请码注册' },
       { id: 'phone', label: '手机号' },
     ] as { id: AuthProviderId; label: string }[]
   ).filter((t) => providers.includes(t.id));
@@ -129,12 +115,7 @@ export function AuthDialog({ open, onClose, onSuccess, defaultProvider }: AuthDi
               mode={mode}
               onModeChange={setMode}
               onSuccess={handleSuccess}
-              requireInviteCode={requireInviteCode}
             />
-          ) : null}
-
-          {active === 'invite' ? (
-            <InviteCodeForm onSuccess={handleSuccess} onSwitch={() => setActive('password')} />
           ) : null}
 
           {active === 'phone' ? <PhoneForm onSwitch={() => setActive('password')} /> : null}
