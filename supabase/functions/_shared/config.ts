@@ -38,7 +38,9 @@ function defaults(): SystemConfig {
     limit: {
       monthlySpendCny: 100,
       maxInputTokens: 8000,
-      maxOutputTokens: 8000,
+      // 16000：给教案/PPT 留出写"血肉"（完整演算、师生对话、12~15 页）的空间；
+      // 单次成本约翻倍到 ¥0.05，按定价毛利仍有 ~50%（见 docs/QUALITY_BASELINE.md）。
+      maxOutputTokens: 16000,
       maxHtmlBytes: 204800,
       serveFallbackPerDay: 500,
       squarePageSize: 24,

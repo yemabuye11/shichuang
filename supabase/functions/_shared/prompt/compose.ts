@@ -18,15 +18,25 @@ const SYSTEM_SECTIONS: readonly string[] = [
 ];
 
 /**
- * 文档类 system 段（在应用段基础上追加 `textbook_aware` 教材感知节）。
- * 放在独立数组，避免污染应用类 prompt 的缓存命中。
+ * 文档类 system 段（**文档专用**，与"生成 HTML 应用"彻底拆分）。
+ *
+ * ⚠️ 历史问题（见 docs/QUALITY_BASELINE.md）：此前这里复用的是 `role` / `output_format` /
+ * `code_quality` 三节，它们分别是"单文件网页应用"、"只输出一个 HTML 文件"、
+ * "use strict / innerHTML"——与文档类要求的"输出 DocModel JSON"**直接冲突**，
+ * 导致模型在两种格式间摇摆，JSON 校验失败率升高，教师频繁看到"生成失败"。
+ *
+ * 现在换成文档专用的 `doc_role` / `doc_output_format`，只保留通用的 `pedagogy` /
+ * `safety` 与教材感知节。`code_quality`（纯前端代码规范）对文档无意义，直接移除，
+ * 顺带省下约 400 token 的无效上下文。
+ *
+ * ⚠️ 改本数组需要重新部署 Edge Function；改**数组里这些模板的内容**则只需改
+ * `prompt_templates` 表（60s 内自动生效），不用部署。
  */
 const DOC_SYSTEM_SECTIONS: readonly string[] = [
-  'system_section:role',
-  'system_section:output_format',
+  'system_section:doc_role',
+  'system_section:doc_output_format',
   'system_section:pedagogy',
   'system_section:safety',
-  'system_section:code_quality',
   TEXTBOOK_AWARE_SECTION,
 ];
 
