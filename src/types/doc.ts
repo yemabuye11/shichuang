@@ -20,6 +20,44 @@ export type VerifyStatus = 'pending' | 'verified' | 'partial';
 /** 产物大类：应用（单文件 HTML 沙箱） vs 文档（平台渲染壳）。 */
 export type Category = 'app' | 'doc';
 
+/**
+ * 布鲁姆认知层级（由低到高）。
+ *
+ * 依据：马萨诸塞大学 Amherst 2025 研究分析了 311 份教案 / 2230 个课堂活动，
+ * **约 90% 只停留在「记忆、理解」这类低阶层级**——这是全行业公认弱点，
+ * 也是本平台教案要主打的差异点。
+ */
+export type BloomLevel =
+  | 'remember' // 记忆
+  | 'understand' // 理解
+  | 'apply' // 应用
+  | 'analyze' // 分析
+  | 'evaluate' // 评价
+  | 'create'; // 创造
+
+/** 高阶认知层级（分析及以上）。 */
+export const HIGHER_ORDER_BLOOM: readonly BloomLevel[] = ['analyze', 'evaluate', 'create'] as const;
+
+/** 布鲁姆层级中文名。 */
+export const BLOOM_LABEL: Readonly<Record<BloomLevel, string>> = {
+  remember: '记忆',
+  understand: '理解',
+  apply: '应用',
+  analyze: '分析',
+  evaluate: '评价',
+  create: '创造',
+};
+
+/** 教案的教学法元信息（认知层级分布 + 课堂互动设计）。 */
+export interface DocPedagogy {
+  /** 各认知层级的环节数量分布。 */
+  readonly bloomDistribution?: Partial<Record<BloomLevel, number>>;
+  /** 高阶（分析及以上）环节占比，0~1。 */
+  readonly higherOrderRatio?: number;
+  /** 互动形式列表，如 `['提问链', '小组讨论', '动手任务']`。 */
+  readonly interactionTypes?: readonly string[];
+}
+
 /** 富文本块类型。 */
 export type BlockType =
   | 'heading'
@@ -90,6 +128,17 @@ export interface DocBlock {
   readonly align?: 'left' | 'center' | 'right';
   /** 图表数据（仅 chart）。 */
   readonly chart?: ChartSpec;
+  /**
+   * 该块所属教学环节的**认知层级**（布鲁姆六层，仅教案的教学过程环节需要）。
+   *
+   * 用于统计高阶思维占比——避免整堂课都是"朗读并背诵"。
+   */
+  readonly bloom?: BloomLevel;
+  /**
+   * 该环节的**课堂互动设计**（提问链 / 小组讨论 / 动手任务 / 同伴互评 等）。
+   * 每个环节必须有，不能只是"教师讲授"。
+   */
+  readonly interaction?: string;
 }
 
 /** PPT 单页幻灯片。 */
@@ -167,6 +216,13 @@ export interface DocModel {
   readonly scene?: SceneDescriptor;
   /** 「待教师核对」标注处（AI 不确定点）。 */
   readonly verifyHints?: readonly string[];
+  /**
+   * 教学法元信息（认知层级分布 + 互动设计）。
+   *
+   * 数据结构先行——前端展示层可以缓，但字段必须先有，
+   * 否则后面想做「高阶思维占比」看板时无数据可用。
+   */
+  readonly pedagogy?: DocPedagogy;
   /** 版本号（从 1 起）。 */
   readonly version: number;
   /** 创建时间（ISO）。 */
