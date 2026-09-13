@@ -96,15 +96,17 @@ supabase/migrations/0011_init_storage_buckets.sql
 **验证**：在 Table Editor 看到以下表即为成功：
 - `profiles`, `apps`, `generations`, `redemption_codes`, `system_config`, `monthly_spend`, `prompt_templates`, `app_type_profiles`, `model_profiles`, `reports`
 
-### 步骤 4：创建 Storage Buckets
+### 步骤 4：Storage Buckets（无需手动建）
 
-在 Supabase Dashboard → Storage → New Bucket：
+运行上面的合并迁移后，以下两个**公开桶会自动建好**，无需手动创建：
 
-| Bucket 名 | 用途 | 公开 |
-|---|---|---|
-| `artifacts` | 应用 HTML、doc HTML 渲染产物 | Public |
-| `doc_json` | DocModel JSON 源文件 | Public |
-| `textbook_uploads` | 教师上传的电子版教材 | Auth required |
+| Bucket 名 | 用途 | 公开 | 由谁创建 |
+|---|---|---|---|
+| `docs` | 文档 HTML / JSON 渲染产物（作者可读写） | Public | 迁移 0018 |
+| `apps-html` | 应用/文档 HTML 影子副本（Edge Function 回源兜底） | Public | 迁移 0031 |
+
+> 旧文档写的 `artifacts` / `doc_json` / `textbook_uploads` 已不再使用，请勿手动创建。
+> 教材上传功能（T07）正式启用时会再补 `textbook_uploads`，届时会有专门迁移。
 
 ### 步骤 5：配置 Edge Function Secrets
 
@@ -202,7 +204,7 @@ git push origin main
 ## 六、常见问题
 
 ### Q1: 生成时报 "API Key 无效"
-检查 Edge Function Secrets 中的 `DEEPSEEK_API_KEY` 是否正确，且账户有余额。
+当前默认 provider 是硅基流动，先检查 Secrets 中的 `SILICONFLOW_API_KEY` 是否正确且账户有余额；若已切到 DeepSeek，再查 `DEEPSEEK_API_KEY`。
 
 ### Q2: 注册时报 "Invalid email or password"
 邀请码为空。请确保注册时填了任意非空邀请码（演示模式不校验邀请码有效性，但必须非空）。

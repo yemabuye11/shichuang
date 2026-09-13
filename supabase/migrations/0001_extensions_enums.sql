@@ -24,7 +24,12 @@ do $$ begin
     'data_collection',
     'ai_item_generation',
     'ai_paper_composition',
-    'ai_lesson_plan'
+    'ai_lesson_plan',
+    'lesson_plan',
+    'ppt',
+    'courseware_2d',
+    'courseware_3d',
+    'office_doc'
   );
 exception when duplicate_object then null; end $$;
 
@@ -48,7 +53,9 @@ do $$ begin
     'generate_refund',
     'redeem_code',
     'admin_adjust',
-    'publish_reward'
+    'publish_reward',
+    'expire',
+    'recharge_self'
   );
 exception when duplicate_object then null; end $$;
 

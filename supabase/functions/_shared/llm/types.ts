@@ -9,7 +9,7 @@
  * - 任何一家 Key 都没配置 → 由 `index.ts` 自动降级为 `MockAdapter`。
  */
 
-export type LlmProvider = 'deepseek' | 'qwen' | 'glm' | 'doubao' | 'mock';
+export type LlmProvider = 'deepseek' | 'siliconflow' | 'qwen' | 'glm' | 'doubao' | 'mock';
 
 export interface TokenUsage {
   promptTokens: number;

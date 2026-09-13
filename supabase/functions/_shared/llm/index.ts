@@ -13,19 +13,21 @@ import { deepseekAdapter } from './deepseek.ts';
 import { qwenAdapter } from './qwen.ts';
 import { glmAdapter } from './glm.ts';
 import { doubaoAdapter } from './doubao.ts';
+import { siliconflowAdapter } from './siliconflow.ts';
 import { mockAdapter } from './mock.ts';
 import type { LlmAdapter, LlmProvider } from './types.ts';
 
 const REGISTRY = new Map<LlmProvider, LlmAdapter>([
   ['deepseek', deepseekAdapter],
+  ['siliconflow', siliconflowAdapter],
   ['qwen', qwenAdapter],
   ['glm', glmAdapter],
   ['doubao', doubaoAdapter],
   ['mock', mockAdapter],
 ]);
 
-/** 回退顺序：越靠前越优先。 */
-const FALLBACK_ORDER: readonly LlmProvider[] = ['deepseek', 'qwen', 'glm', 'doubao'];
+/** 回退顺序：越靠前越优先。siliconflow 作为 DeepSeek 之后的首选备份。 */
+const FALLBACK_ORDER: readonly LlmProvider[] = ['deepseek', 'siliconflow', 'qwen', 'glm', 'doubao'];
 
 /**
  * 按 provider 取适配器；未注册时抛错。

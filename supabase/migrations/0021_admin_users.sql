@@ -15,7 +15,10 @@
 --       绕过客户端 RLS，故 PII 绝不会下发到非 admin 客户端。
 -- =============================================================================
 
-create or replace function public.admin_list_users(
+-- 0021 在 0009 基础上补强（增加 email / generation_count 列），返回结构变了，
+-- 必须用 drop + create（CREATE OR REPLACE 不允许改 RETURNS TABLE 列数，会 42P13）。
+drop function if exists public.admin_list_users(text, integer, integer);
+create function public.admin_list_users(
   p_q      text default null,
   p_offset integer default 0,
   p_limit  integer default 50
