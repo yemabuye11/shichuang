@@ -77,21 +77,12 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 ### 步骤 3：运行数据库迁移
 
-在 Supabase Dashboard → SQL Editor，**按顺序**执行：
+在 Supabase Dashboard → SQL Editor，按下面两步执行（Supabase SQL Editor 是**逐句 autocommit**，不是整段事务，失败按"已部分执行"处理，详见 `docs/RESET_DB.sql`）：
 
-```
-supabase/migrations/0001_init_enums.sql
-supabase/migrations/0002_init_tables.sql
-supabase/migrations/0003_init_indexes.sql
-supabase/migrations/0004_init_triggers.sql
-supabase/migrations/0005_init_rpc_credit.sql
-supabase/migrations/0006_init_rls.sql
-supabase/migrations/0007_init_seed_prompts.sql
-supabase/migrations/0008_init_seed_config.sql
-supabase/migrations/0009_init_admin_role.sql
-supabase/migrations/0010_init_rpc_square.sql
-supabase/migrations/0011_init_storage_buckets.sql
-```
+1. **一次性粘贴执行**合并文件 `docs/ALL_MIGRATIONS_0001-0029.sql`（已按数字序合并、含分隔注释）。
+2. **单独执行** `supabase/migrations/0030_siliconflow_provider.sql`（硅基流动适配器）和 `supabase/migrations/0031_storage_apps_html.sql`（补齐 `apps-html` 桶）。
+
+> ⚠️ 不要一个一个跑旧文件名（`0001_init_enums.sql` … `0011_*` 等）——它们已被合并文件取代，单跑会在同一事务内撞 55P04 / 42P13 错误。
 
 **验证**：在 Table Editor 看到以下表即为成功：
 - `profiles`, `apps`, `generations`, `redemption_codes`, `system_config`, `monthly_spend`, `prompt_templates`, `app_type_profiles`, `model_profiles`, `reports`
@@ -110,20 +101,21 @@ supabase/migrations/0011_init_storage_buckets.sql
 
 ### 步骤 5：配置 Edge Function Secrets
 
-在 Supabase Dashboard → Edge Functions → Manage Secrets：
+在 Supabase Dashboard → Edge Functions → Manage Secrets（**这些密钥只在服务器端使用，从不下发前端**）：
 
 ```bash
-# AI 模型 API Key（客户自购）
+# AI 模型 Key（客户自购，至少填一个；当前默认 provider 是硅基流动）
+SILICONFLOW_API_KEY=sk-xxxxxxxxxxxx
+# 如需改用 DeepSeek 官方，再填下面这个（并跑 0030 底部 UPDATE 切默认）
 DEEPSEEK_API_KEY=sk-xxxxxxxxxxxx
 
-# ArtifactStore（GitHub Pages 产物分发）
-ARTIFACT_PROVIDER=github_pages
-ARTIFACT_REPO=<your-github-username>/shichuang-artifacts
-ARTIFACT_TOKEN=ghp_xxxxxxxxxxxx  # GitHub PAT，repo 权限
-
-# 月度支出上限阀（默认 100 元）
-MONTHLY_SPEND_LIMIT_CNY=100
+# 月度支出上限阀（默认 1000 元，已在迁移 0025 改为 1000；此处可覆盖）
+MONTHLY_SPEND_LIMIT_CNY=1000
+# 可选：track-view 统计加盐（不填则用代码内置默认值）
+SECRET_SALT=随便一串字符
 ```
+
+> ❌ 没有 `ARTIFACT_PROVIDER` / `ARTIFACT_TOKEN` 这类变量——产物走 Supabase Storage（`docs` / `apps-html` 桶），不依赖 GitHub 仓库 token。
 
 ### 步骤 6：部署 Edge Functions
 
