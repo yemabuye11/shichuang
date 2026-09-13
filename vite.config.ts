@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
           //    否则教师首次打开平台就会被 Service Worker 静默下载 747KB，
           //    哪怕他这学期一次 3D 课件都不做。改为「用到再缓存」（下方 CacheFirst）。
           globIgnores: ['**/three.module-*.js', '**/OrbitControls-*.js'],
-          navigateFallback: 'offline.html',
+          navigateFallback: '404.html',
           navigateFallbackDenylist: [/^\/api\//, /^\/functions\//],
           runtimeCaching: [
             {

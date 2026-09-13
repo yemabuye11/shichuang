@@ -34,7 +34,7 @@ function withSuspense(node: JSX.Element): JSX.Element {
   return <Suspense fallback={<InlineLoading />}>{node}</Suspense>;
 }
 
-export const router = createBrowserRouter([
+const routes = [
   {
     path: ROUTES.HOME,
     element: <AppShell />,
@@ -84,6 +84,14 @@ export const router = createBrowserRouter([
       { path: '*', element: <NotFoundPage /> },
     ],
   },
-]);
+];
+
+// GitHub Pages 项目页部署在 /shichuang/ 子路径下。
+// 不传 basename 时，BrowserRouter 会把 URL 的 /shichuang/ 当成路由去匹配，
+// 匹配不到任何路由 → 落到 * 显示 404 页（即"打开要先点回首页"的根因）。
+// 用 Vite 注入的 BASE_URL（部署时 = /shichuang/，本地 dev = /）作为 basename 即可根治。
+export const router = createBrowserRouter(routes, {
+  basename: import.meta.env.BASE_URL,
+});
 
 export default router;
