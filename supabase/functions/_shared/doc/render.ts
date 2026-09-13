@@ -10,7 +10,7 @@
  * 该 HTML 与「编辑态（前端 TipTap）/ 导出态（T08 docx/pptxgenjs）」共享同一 DocModel。
  */
 
-import type { DocBlock, DocModel, SceneDescriptor, Slide } from './types.ts';
+import type { ChartSpec, DocBlock, DocModel, SceneDescriptor, Slide } from './types.ts';
 
 /** HTML 转义。 */
 function esc(s: string | undefined | null): string {
@@ -26,6 +26,165 @@ function esc(s: string | undefined | null): string {
 /** 在文本中保留基础换行。 */
 function nl2br(s: string | undefined): string {
   return esc(s).replace(/\n/g, '<br>');
+}
+
+/** 图表画布尺寸与内边距（与前端 `ChartBlockView` 保持一致）。 */
+const CHART = { w: 640, h: 360, top: 24, right: 24, bottom: 46, left: 56 } as const;
+
+/** 数值格式化（去掉多余小数）。 */
+function fmtNum(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  const abs = Math.abs(n);
+  if (abs >= 1000) return String(Math.round(n));
+  if (abs >= 10) return String(Math.round(n * 10) / 10);
+  return String(Math.round(n * 100) / 100);
+}
+
+/** 取 5 段刻度。 */
+function niceTicks(min: number, max: number): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
+    const v = Number.isFinite(min) ? min : 0;
+    return [v - 2, v - 1, v, v + 1, v + 2];
+  }
+  const step = (max - min) / 4;
+  return [0, 1, 2, 3, 4].map((i) => min + step * i);
+}
+
+/**
+ * 渲染图表块为**内联 SVG 字符串**（不引第三方图表库）。
+ *
+ * @param spec 图表数据。
+ */
+function renderChartSvg(spec: ChartSpec): string {
+  const { w, h, top, right, bottom, left } = CHART;
+  const plotW = w - left - right;
+  const plotH = h - top - bottom;
+
+  const pts = (spec.points ?? []).filter((p) => Array.isArray(p) && p.length >= 2) as number[][];
+  const categories = spec.categories ?? [];
+  const values = spec.values ?? [];
+  const isBar = spec.kind === 'bar';
+
+  let xMin = 0;
+  let xMax = 1;
+  let yMin = 0;
+  let yMax = 1;
+
+  if (isBar) {
+    xMin = -0.5;
+    xMax = Math.max(categories.length - 0.5, 0.5);
+    const nums = values.map(Number).filter(Number.isFinite);
+    yMin = Math.min(0, ...nums);
+    yMax = Math.max(0, ...nums);
+  } else if (pts.length > 0) {
+    const xs = pts.map((p) => Number(p[0]));
+    const ys = pts.map((p) => Number(p[1]));
+    xMin = Math.min(...xs);
+    xMax = Math.max(...xs);
+    yMin = Math.min(...ys);
+    yMax = Math.max(...ys);
+    if (xMin === xMax) {
+      xMin -= 1;
+      xMax += 1;
+    }
+    if (yMin === yMax) {
+      yMin -= 1;
+      yMax += 1;
+    }
+    if (spec.kind === 'function') {
+      yMin = Math.min(yMin, 0);
+      yMax = Math.max(yMax, 0);
+    }
+  }
+  const yPad = (yMax - yMin) * 0.06 || 1;
+  yMin -= yPad;
+  yMax += yPad;
+
+  const sx = (x: number): number => left + ((x - xMin) / (xMax - xMin || 1)) * plotW;
+  const sy = (y: number): number => top + plotH - ((y - yMin) / (yMax - yMin || 1)) * plotH;
+
+  const parts: string[] = [];
+  const gridColor = '#EDEFF3';
+  const axisColor = '#C9CFD8';
+
+  for (const t of niceTicks(yMin, yMax)) {
+    parts.push(
+      `<line x1="${left}" y1="${sy(t).toFixed(2)}" x2="${w - right}" y2="${sy(t).toFixed(2)}" stroke="${gridColor}" stroke-width="1"/>`,
+      `<text x="${left - 8}" y="${(sy(t) + 4).toFixed(2)}" text-anchor="end" font-size="11" fill="#6B7280">${esc(fmtNum(t))}</text>`,
+    );
+  }
+
+  if (isBar) {
+    const slot = plotW / Math.max(categories.length, 1);
+    const barW = Math.min(slot * 0.56, 48);
+    values.forEach((v, i) => {
+      const nv = Number(v);
+      if (!Number.isFinite(nv)) return;
+      const yTop = sy(Math.max(nv, 0));
+      const yBottom = sy(Math.min(nv, 0));
+      const bh = Math.max(yBottom - yTop, 1);
+      parts.push(
+        `<rect x="${(sx(i) - barW / 2).toFixed(2)}" y="${yTop.toFixed(2)}" width="${barW.toFixed(2)}" height="${bh.toFixed(2)}" rx="4" fill="#2F6BFF" opacity="0.85"/>`,
+        `<text x="${sx(i).toFixed(2)}" y="${(yTop - 6).toFixed(2)}" text-anchor="middle" font-size="11" fill="#4B5563" font-weight="600">${esc(fmtNum(nv))}</text>`,
+        `<text x="${sx(i).toFixed(2)}" y="${h - bottom + 20}" text-anchor="middle" font-size="11" fill="#6B7280">${esc(String(categories[i] ?? ''))}</text>`,
+      );
+    });
+  } else if (pts.length > 0) {
+    const d = pts
+      .map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(Number(p[0])).toFixed(2)},${sy(Number(p[1])).toFixed(2)}`)
+      .join(' ');
+    parts.push(
+      `<path d="${d}" fill="none" stroke="#2F6BFF" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`,
+    );
+    for (const p of pts) {
+      parts.push(
+        `<circle cx="${sx(Number(p[0])).toFixed(2)}" cy="${sy(Number(p[1])).toFixed(2)}" r="3" fill="#fff" stroke="#2F6BFF" stroke-width="2"/>`,
+      );
+    }
+    const tickCount = 5;
+    for (let i = 0; i < tickCount; i += 1) {
+      const v = xMin + ((xMax - xMin) / (tickCount - 1)) * i;
+      parts.push(
+        `<text x="${sx(v).toFixed(2)}" y="${h - bottom + 20}" text-anchor="middle" font-size="11" fill="#6B7280">${esc(fmtNum(v))}</text>`,
+      );
+    }
+  } else {
+    parts.push(
+      `<text x="${w / 2}" y="${h / 2}" text-anchor="middle" font-size="13" fill="#9AA4B2">（图表数据为空）</text>`,
+    );
+  }
+
+  const zeroY = yMin <= 0 && yMax >= 0 ? sy(0) : null;
+  parts.push(
+    `<line x1="${left}" y1="${top}" x2="${left}" y2="${h - bottom}" stroke="${axisColor}" stroke-width="1.5"/>`,
+    `<line x1="${left}" y1="${h - bottom}" x2="${w - right}" y2="${h - bottom}" stroke="${axisColor}" stroke-width="1.5"/>`,
+  );
+  if (zeroY !== null && zeroY > top && zeroY < h - bottom) {
+    parts.push(
+      `<line x1="${left}" y1="${zeroY.toFixed(2)}" x2="${w - right}" y2="${zeroY.toFixed(2)}" stroke="${axisColor}" stroke-width="1.5"/>`,
+    );
+  }
+  if (spec.xLabel) {
+    parts.push(
+      `<text x="${w / 2}" y="${h - 8}" text-anchor="middle" font-size="12" fill="#4B5563">${esc(spec.xLabel)}</text>`,
+    );
+  }
+  if (spec.yLabel) {
+    parts.push(
+      `<text x="14" y="${h / 2}" text-anchor="middle" font-size="12" fill="#4B5563" transform="rotate(-90 14 ${h / 2})">${esc(spec.yLabel)}</text>`,
+    );
+  }
+
+  const expr = spec.expression
+    ? `<div class="b-chart-expr">${esc(spec.expression)}</div>`
+    : '';
+  const title = spec.title ? `<figcaption class="b-cap">${esc(spec.title)}</figcaption>` : '';
+
+  return (
+    `<figure class="b-fig b-chart">${expr}` +
+    `<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="${esc(spec.title ?? spec.expression ?? '图表')}">${parts.join('')}</svg>` +
+    `${title}</figure>`
+  );
 }
 
 /** 渲染单个富文本块。 */
@@ -62,6 +221,12 @@ function renderBlock(block: DocBlock): string {
         ? `<img src="${esc(block.src)}" alt="${esc(block.caption)}" loading="lazy">`
         : `<div class="b-img-ph">建议配图：${esc(block.caption ?? '（未提供）')}</div>`;
       return `<figure class="b-fig"${idAttr}>${inner}${caption}</figure>`;
+    }
+    case 'chart': {
+      if (!block.chart) {
+        return `<p class="b-p"${idAttr}>${esc(block.caption ?? '（图表数据缺失）')}</p>`;
+      }
+      return `<div${idAttr}>${renderChartSvg(block.chart)}</div>`;
     }
     case 'callout': {
       const align = block.align ?? 'left';
@@ -189,6 +354,10 @@ body{margin:0;padding:32px;color:var(--ink);background:var(--bg);
 .b-cap{font-size:13px;color:var(--sub);margin-top:6px;}
 .b-callout{background:#F0F5FF;border-left:4px solid var(--brand);padding:12px 16px;border-radius:8px;
   margin:14px 0;color:#234;font-size:15px;}
+.b-chart{margin:16px 0;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff;}
+.b-chart svg{display:block;width:100%;height:auto;}
+.b-chart-expr{text-align:center;font-weight:700;color:var(--brand);font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:15px;margin-bottom:6px;}
 .slides{margin:0;}
 .slide{page-break-after:always;border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:24px;}
 .s-title{font-size:24px;font-weight:700;margin:0 0 14px;}

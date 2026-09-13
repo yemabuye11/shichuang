@@ -50,6 +50,27 @@ function blockText(block: DocBlock): string {
   if (block.type === 'image') {
     return block.caption ? `[图] ${block.caption}` : '[图]';
   }
+  if (block.type === 'chart') {
+    // 图表在网页版是内联 SVG；导出时降级为「表达式 + 关键取值」文本，
+    // 保证教师离线拿到文件时仍能照着把图画到黑板上。
+    const c = block.chart;
+    if (!c) return block.caption ? `[图] ${block.caption}` : '[图]';
+    const lines: string[] = [
+      c.expression ? `[图] ${c.expression}` : c.title ? `[图] ${c.title}` : '[图]',
+    ];
+    if (c.kind === 'bar') {
+      const pairs = (c.categories ?? []).map((cat, i) => `${cat}：${c.values?.[i] ?? ''}`);
+      if (pairs.length > 0) lines.push(`取值：${pairs.join('，')}`);
+    } else {
+      const pts = (c.points ?? []).filter((p) => Array.isArray(p) && p.length >= 2);
+      const step = Math.max(1, Math.ceil(pts.length / 8));
+      const sampled = pts.filter((_, i) => i % step === 0);
+      if (sampled.length > 0) {
+        lines.push(`关键点：${sampled.map((p) => `(${p[0]}, ${p[1]})`).join(' ')}`);
+      }
+    }
+    return lines.join('\n');
+  }
   if (block.type === 'heading') {
     return block.text ?? '';
   }

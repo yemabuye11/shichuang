@@ -27,7 +27,42 @@ export type BlockType =
   | 'list'
   | 'table'
   | 'image'
-  | 'callout';
+  | 'callout'
+  | 'chart'; // 图表（纯内联 SVG 渲染，不引第三方图表库）
+
+/**
+ * 图表类型。
+ *
+ * - `function`：函数曲线（数学/物理课件的核心——让课件里真的有函数图像）；
+ * - `line`：折线（趋势、对比）；
+ * - `bar`：柱状（分类数据对比）。
+ */
+export type ChartKind = 'function' | 'line' | 'bar';
+
+/**
+ * 图表数据（`type='chart'` 的块专用）。
+ *
+ * 设计原则：**平台渲染，不引第三方图表库**（three 747KB 的教训：不为单一功能拖垮首屏）。
+ * 前端与 Edge 都用同一份结构算出内联 SVG，离线、校园网、导出 HTML 都能显示。
+ */
+export interface ChartSpec {
+  /** 图表类型。 */
+  readonly kind: ChartKind;
+  /** 图注（渲染在图下方，如"图1 二次函数图像"）。 */
+  readonly title?: string;
+  /** X 轴名称。 */
+  readonly xLabel?: string;
+  /** Y 轴名称。 */
+  readonly yLabel?: string;
+  /** 函数表达式（kind='function' 时给，如 `y = x^2 - 2x - 3`，展示用）。 */
+  readonly expression?: string;
+  /** 采样点 `[x, y]`（kind='function' / 'line' 时用，建议 12~25 个点）。 */
+  readonly points?: readonly (readonly number[])[];
+  /** 分类名（kind='bar' 时用）。 */
+  readonly categories?: readonly string[];
+  /** 分类对应数值（kind='bar' 时用）。 */
+  readonly values?: readonly number[];
+}
 
 /** 富文本块（文档类的最小内容单元，可被 TipTap / 导出映射复用）。 */
 export interface DocBlock {
@@ -53,6 +88,8 @@ export interface DocBlock {
   readonly caption?: string;
   /** 对齐方式。 */
   readonly align?: 'left' | 'center' | 'right';
+  /** 图表数据（仅 chart）。 */
+  readonly chart?: ChartSpec;
 }
 
 /** PPT 单页幻灯片。 */

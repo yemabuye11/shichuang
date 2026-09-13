@@ -30,7 +30,42 @@ export type BlockType =
   | 'list'
   | 'table'
   | 'image'
-  | 'callout';
+  | 'callout'
+  | 'chart'; // 图表（纯内联 SVG 渲染，不引第三方图表库）
+
+/**
+ * 图表类型。
+ *
+ * - `function`：函数曲线（数学/物理课件的核心——让课件里真的有函数图像）；
+ * - `line`：折线（趋势、对比）；
+ * - `bar`：柱状（分类数据对比）。
+ */
+export type ChartKind = 'function' | 'line' | 'bar';
+
+/**
+ * 图表数据（`type='chart'` 的块专用）。
+ *
+ * 设计原则：**平台渲染，不引第三方图表库**。前端与 Edge 用同一份结构算出内联 SVG，
+ * 离线、校园网、导出 HTML 都能显示。
+ */
+export interface ChartSpec {
+  /** 图表类型。 */
+  readonly kind: ChartKind;
+  /** 图注（渲染在图下方）。 */
+  readonly title?: string;
+  /** X 轴名称。 */
+  readonly xLabel?: string;
+  /** Y 轴名称。 */
+  readonly yLabel?: string;
+  /** 函数表达式（kind='function' 时给，展示用）。 */
+  readonly expression?: string;
+  /** 采样点 `[x, y]`（kind='function' / 'line' 时用）。 */
+  readonly points?: readonly (readonly number[])[];
+  /** 分类名（kind='bar' 时用）。 */
+  readonly categories?: readonly string[];
+  /** 分类对应数值（kind='bar' 时用）。 */
+  readonly values?: readonly number[];
+}
 
 /** 富文本块（文档类的最小内容单元，可被编辑/导出映射复用）。 */
 export interface DocBlock {
@@ -45,6 +80,8 @@ export interface DocBlock {
   readonly src?: string;
   readonly caption?: string;
   readonly align?: 'left' | 'center' | 'right';
+  /** 图表数据（仅 chart）。 */
+  readonly chart?: ChartSpec;
 }
 
 /** PPT 单页幻灯片。 */
@@ -111,13 +148,18 @@ export const DOC_TYPE_LABELS: Readonly<Record<DocType, string>> = {
   office_doc: '办公文档',
 };
 
-/** 文档类型 → 默认积分成本（与 migration 0012 app_type_profiles 对应）。 */
+/**
+ * 文档类型 → 默认积分成本。
+ *
+ * ⚠️ 必须与最新迁移保持一致：0012 曾为 1/2/2/3/1，**0019 已上调为 2/3/3/4/2**。
+ * 这里只是兜底展示值，真实计费一律走 `app_type_profiles.credit_cost`（配置表）。
+ */
 export const DOC_TYPE_COST: Readonly<Record<DocType, number>> = {
-  lesson_plan: 1,
-  ppt: 2,
-  courseware_2d: 2,
-  courseware_3d: 3,
-  office_doc: 1,
+  lesson_plan: 2,
+  ppt: 3,
+  courseware_2d: 3,
+  courseware_3d: 4,
+  office_doc: 2,
 };
 
 /** 是否为合法的文档类型。 */

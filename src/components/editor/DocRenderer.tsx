@@ -5,6 +5,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import type { DocBlock, DocModel, Slide } from '@/types/doc';
 import { ThreeViewer } from '@/components/editor/ThreeViewer';
+import { ChartBlockView } from '@/components/editor/ChartBlockView';
 
 /**
  * 文档模型渲染器（一份 DocModel → 网页呈现）。
@@ -116,6 +117,16 @@ function BlockView({ block }: { block: DocBlock }): JSX.Element {
           ) : null}
         </Box>
       );
+    case 'chart': {
+      if (!block.chart) {
+        return (
+          <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+            {block.caption ?? '（图表数据缺失）'}
+          </Typography>
+        );
+      }
+      return <ChartBlockView spec={block.chart} caption={block.caption} />;
+    }
     case 'callout':
       return (
         <Box

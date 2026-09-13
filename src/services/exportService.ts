@@ -12,7 +12,7 @@
  * （构建后它们是独立 chunk，网络面板可验证导出前无相关请求）。
  */
 
-import type { DocBlock, DocModel } from '@/types/doc';
+import type { ChartSpec, DocBlock, DocModel } from '@/types/doc';
 
 // ---------------------------------------------------------------------------
 // 导出选项
@@ -61,10 +61,44 @@ function blockText(block: DocBlock): string {
   if (block.type === 'image') {
     return block.caption ? `[图] ${block.caption}` : '[图]';
   }
+  if (block.type === 'chart') {
+    // 图表在网页版是内联 SVG；导出 docx/pptx 时降级为「表达式 + 关键取值」文本，
+    // 保证教师离线拿到文件时仍能照着把图画到黑板上。
+    return chartToText(block.chart, block.caption);
+  }
   if (block.type === 'heading') {
     return block.text ?? '';
   }
   return block.text ?? '';
+}
+
+/**
+ * 图表 → 可读文本（导出降级用）。
+ *
+ * @param chart 图表数据。
+ * @param caption 图注。
+ */
+function chartToText(chart: ChartSpec | undefined, caption?: string): string {
+  if (!chart) return caption ? `[图] ${caption}` : '[图]';
+  const lines: string[] = [];
+  if (chart.expression) lines.push(`[图] ${chart.expression}`);
+  else if (chart.title) lines.push(`[图] ${chart.title}`);
+  else lines.push('[图]');
+
+  if (chart.kind === 'bar') {
+    const pairs = (chart.categories ?? []).map((c, i) => `${c}：${chart.values?.[i] ?? ''}`);
+    if (pairs.length > 0) lines.push(`取值：${pairs.join('，')}`);
+  } else {
+    const pts = (chart.points ?? []).filter((p) => Array.isArray(p) && p.length >= 2);
+    // 最多列 8 个采样点，避免导出文件被长列表撑爆
+    const step = Math.max(1, Math.ceil(pts.length / 8));
+    const sampled = pts.filter((_, i) => i % step === 0);
+    if (sampled.length > 0) {
+      lines.push(`关键点：${sampled.map((p) => `(${p[0]}, ${p[1]})`).join(' ')}`);
+    }
+  }
+  if (caption && !chart.expression) lines.push(caption);
+  return lines.join('\n');
 }
 
 /** 把 DocModel 映射为 docx 大纲节点序列（对齐 Edge `toDocxOutline`）。 */
@@ -85,6 +119,8 @@ function toDocxOutline(model: DocModel): readonly DocxNode[] {
       }
     } else if (b.type === 'image') {
       nodes.push({ level: 0, text: `[图] ${b.caption ?? ''}` });
+    } else if (b.type === 'chart') {
+      nodes.push({ level: 0, text: chartToText(b.chart, b.caption) });
     } else {
       const t = blockText(b);
       if (t) nodes.push({ level: 0, text: t });
