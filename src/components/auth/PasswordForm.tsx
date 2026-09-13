@@ -36,6 +36,11 @@ export function PasswordForm({
   const [cooldownSec, setCooldownSec] = useState(0);
   const [error, setError] = useState('');
   const [devCode, setDevCode] = useState('');
+  /** 忘记密码邮件的发送结果提示（`success` / `error`）。 */
+  const [resetTip, setResetTip] = useState<{ severity: 'success' | 'error'; text: string } | null>(
+    null,
+  );
+  const [resetting, setResetting] = useState(false);
 
   const isSubmitting = sending || verifying;
   const cooldownRef = useRef<number | null>(null);
@@ -57,6 +62,7 @@ export function PasswordForm({
       setCode('');
       setDevCode('');
       setCooldownSec(0);
+      setResetTip(null);
     }
   }, [isSignUp]);
 
@@ -159,6 +165,36 @@ export function PasswordForm({
     }
   };
 
+  /**
+   * 发送「重置密码」邮件。
+   *
+   * 注意：本按钮必须是 `type="button"`——表单的 submit 事件统一由
+   * `handleSubmit()` 派发到登录/注册，用 submit 会误触发登录。
+   */
+  const sendResetLink = async (): Promise<void> => {
+    setError('');
+    setResetTip(null);
+    if (!email.trim()) {
+      setResetTip({ severity: 'error', text: '请先填写邮箱' });
+      return;
+    }
+    setResetting(true);
+    try {
+      await authService.requestPasswordReset(email);
+      setResetTip({
+        severity: 'success',
+        text: '重置链接已发送到你的邮箱，请查收（含垃圾箱）；链接 1 小时内有效',
+      });
+    } catch (err) {
+      setResetTip({
+        severity: 'error',
+        text: err instanceof Error ? err.message : '发送失败，请稍后重试',
+      });
+    } finally {
+      setResetting(false);
+    }
+  };
+
   // 统一由 form 的 submit 事件驱动（而不是给每个按钮挂 onClick），好处：
   //  1. 输入框里按「回车」也能走对应步骤（以前 onSubmit 只有 preventDefault，回车毫无反应，
   //     用户以为没成功，容易误以为"注册没跳到下一步"）；
@@ -216,7 +252,7 @@ export function PasswordForm({
               {emailSent ? (
                 <>
                   {devCode ? (
-                    <Alert severity="info">测试模式验证码：{devCode}</Alert>
+                    <Alert severity="info">验证码：{devCode}（已直接显示，无需查收邮件）</Alert>
                   ) : null}
                   <TextField
                     label="6 位验证码"
@@ -289,6 +325,21 @@ export function PasswordForm({
             inputProps={{ 'aria-label': '密码', autoComplete: 'current-password' }}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
           />
+          <Box sx={{ textAlign: 'right' }}>
+            <Button
+              type="button"
+              variant="text"
+              size="small"
+              disabled={resetting}
+              onClick={() => void sendResetLink()}
+              sx={{ minHeight: 36, color: 'text.secondary', fontSize: 13.5, textTransform: 'none' }}
+            >
+              {resetting ? '发送中…' : '忘记密码？'}
+            </Button>
+          </Box>
+
+          {resetTip ? <Alert severity={resetTip.severity}>{resetTip.text}</Alert> : null}
+
           <Button
             type="submit"
             variant="contained"
