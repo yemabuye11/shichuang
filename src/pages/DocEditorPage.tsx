@@ -26,6 +26,7 @@ import * as docService from '@/services/docService';
 import { docRunPath, ROUTES } from '@/config/routes';
 import { getDocTypeLabel } from '@/config/constants';
 import type { DocBlock, DocModel, Slide } from '@/types/doc';
+import { blocksToText } from '@/utils/geometryKernel';
 
 /**
  * 文档在线编辑页（UI-5，T08）。
@@ -237,7 +238,7 @@ export function DocEditorPage(): JSX.Element {
         <Box sx={{ mb: 3 }}>
           <Typography sx={{ fontSize: 14, fontWeight: 800, mb: 1 }}>3D 课件预览（网页版可交互旋转 / 拆解）</Typography>
           <Suspense fallback={<InlineLoading message="加载 3D 预览…" />}>
-            <ThreeViewer scene={model.scene} height={360} />
+            <ThreeViewer scene={model.scene} height={360} bodyText={blocksToText(model.blocks)} />
           </Suspense>
         </Box>
       ) : null}

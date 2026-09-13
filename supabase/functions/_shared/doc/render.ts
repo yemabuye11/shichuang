@@ -11,6 +11,7 @@
  */
 
 import type { ChartSpec, DocBlock, DocModel, SceneDescriptor, Slide } from './types.ts';
+import { blocksToText, checkGeometry } from './geometryKernel.ts';
 
 /** HTML 转义。 */
 function esc(s: string | undefined | null): string {
@@ -264,7 +265,7 @@ function renderSlides(slides: readonly Slide[]): string {
  * 不加载任何外部资源、不假装能交互。交互版 3D 在平台内 `/d/:id` 由 ThreeViewer 渲染
  * （且只支持 geometry / molecule 两类真模型，其余类型同样给诚实提示而非空壳模型）。
  */
-function renderScene(scene: SceneDescriptor): string {
+function renderScene(scene: SceneDescriptor, bodyText = ''): string {
   const supported = scene.type === 'geometry' || scene.type === 'molecule';
   const kindLabel: Record<string, string> = {
     geometry: '几何体',
@@ -284,16 +285,30 @@ function renderScene(scene: SceneDescriptor): string {
     ? '这是一个静态预览。可旋转 / 拆解的交互版请在平台内打开本文档查看。'
     : '平台的 3D 课件目前只支持「几何体」与「分子结构」两类真模型。为避免给出与课堂内容无关的空壳模型，这里不显示 3D，请以上方文字讲解为准。';
 
-  const annos = (scene.annotations ?? []).length
-    ? `<ul class="scene-anno">${(scene.annotations ?? [])
-        .map((a) => `<li>${esc(a)}</li>`)
-        .join('')}</ul>`
-    : '';
+  // ⚠️ 几何体：标注值一律走确定性内核重算，不用 AI 直接给的数值（教学事故防线）
+  const geo = scene.type === 'geometry' ? checkGeometry(scene, bodyText) : null;
+
+  const annos = (() => {
+    if (geo) return geo.annotations;
+    return (scene.annotations ?? []).map((a) => String(a));
+  })();
+
+  const annoHtml =
+    annos.length > 0 ? `<ul class="scene-anno">${annos.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : '';
+
+  const guardHtml =
+    geo && geo.degradedReason
+      ? `<p class="scene-guard">⚠ ${esc(geo.degradedReason)}</p>`
+      : geo && geo.corrected
+        ? `<p class="scene-guard">标注已按几何关系自动校正：模型上的数值由平台按几何公式重新计算，不采用 AI 直接给出的数值${
+            geo.droppedAiAnnotations.length > 0 ? `；已剔除 ${geo.droppedAiAnnotations.length} 条不一致的原标注` : ''
+          }${geo.droppedByBody.length > 0 ? `；另有 ${geo.droppedByBody.length} 个量与正文不一致，已不予展示` : ''}。</p>`
+        : '';
 
   return (
     `<div class="scene-wrap${supported ? '' : ' scene-unsupported'}">` +
     `<div class="scene-head">${head}</div>` +
-    `<div class="scene-card"><p class="scene-notice">${esc(notice)}</p>${annos}</div>` +
+    `<div class="scene-card"><p class="scene-notice">${esc(notice)}</p>${guardHtml}${annoHtml}</div>` +
     `</div>`
   );
 }
@@ -320,7 +335,9 @@ export function renderDoc(model: DocModel): string {
   const blocksHtml = (model.blocks ?? []).map(renderBlock).join('');
   const slidesHtml = model.kind === 'ppt' && model.slides ? renderSlides(model.slides) : '';
   const sceneHtml =
-    model.kind === 'courseware_3d' && model.scene ? renderScene(model.scene) : '';
+    model.kind === 'courseware_3d' && model.scene
+      ? renderScene(model.scene, blocksToText(model.blocks))
+      : '';
   const verifyHtml =
     model.verifyHints && model.verifyHints.length > 0
       ? `<section class="verify"><h3>⚠ 待教师核对</h3><ul>${model.verifyHints
@@ -373,6 +390,8 @@ body{margin:0;padding:32px;color:var(--ink);background:var(--bg);
 .scene-unsupported .scene-notice{color:#6B4E00;}
 .scene-anno{margin:12px 0 0;padding-left:20px;color:var(--sub);font-size:14px;}
 .scene-anno li{margin:3px 0;}
+.scene-guard{margin:10px 0 0;padding:8px 12px;border-radius:8px;background:#F0F5FF;
+  border-left:4px solid var(--brand);font-size:13px;line-height:1.75;color:#234;}
 .verify{margin-top:28px;border:1px solid #F2C14E;background:#FFF8E6;border-radius:10px;padding:14px 18px;}
 .verify h3{margin:0 0 8px;font-size:16px;color:#9A6B00;}
 .verify ul{margin:0;padding-left:20px;}

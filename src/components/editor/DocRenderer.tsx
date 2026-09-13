@@ -6,6 +6,7 @@ import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import type { DocBlock, DocModel, Slide } from '@/types/doc';
 import { ThreeViewer } from '@/components/editor/ThreeViewer';
 import { ChartBlockView } from '@/components/editor/ChartBlockView';
+import { blocksToText } from '@/utils/geometryKernel';
 
 /**
  * 文档模型渲染器（一份 DocModel → 网页呈现）。
@@ -28,7 +29,8 @@ export function DocRenderer({ model }: DocRendererProps): JSX.Element {
           <Typography sx={{ fontSize: 15, fontWeight: 800, mb: 1 }}>
             {model.scene.title ?? '3D 课件'}
           </Typography>
-          <ThreeViewer scene={model.scene} height={440} />
+          {/* bodyText 用于几何三重自检：题干数值 = 推导末步 = 模型标注 */}
+          <ThreeViewer scene={model.scene} height={440} bodyText={blocksToText(model.blocks)} />
         </Box>
       ) : null}
 

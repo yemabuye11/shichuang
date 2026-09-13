@@ -4,6 +4,7 @@ import LayersIcon from '@mui/icons-material/Layers';
 import LabelIcon from '@mui/icons-material/Label';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import type { SceneDescriptor, SceneKind } from '@/types/doc';
+import { checkGeometry, parseShape, resolveDims, GEO_SHAPE_LABEL } from '@/utils/geometryKernel';
 
 /**
  * 3D 课件查看器（courseware_3d）。
@@ -54,6 +55,11 @@ export interface ThreeViewerProps {
   scene: SceneDescriptor;
   /** 画布高度（像素或 CSS 字符串）。 */
   height?: number | string;
+  /**
+   * 文档正文（用于几何**三重自检**：题干数值 = 推导末步 = 模型标注）。
+   * 传空则只做「参数 → 确定性计算 → 覆盖 AI 数值」两层。
+   */
+  bodyText?: string;
 }
 
 /** 可拆解的部件。 */
@@ -96,23 +102,33 @@ function buildParts(
 
   switch (desc.type) {
     case 'geometry': {
+      // ⚠️ 确定性内核：尺寸、几何体、标注全部由 params 算出来，
+      //    **不使用 AI 直接给的数值标注**（见 src/utils/geometryKernel.ts）。
+      const dims = resolveDims(params, parseShape(params.shape) ?? 'box');
       let geo: import('three').BufferGeometry;
-      switch (shape) {
+      let maxExtent = 1;
+      switch (dims.shape) {
         case 'sphere':
-          geo = new THREE.SphereGeometry(1, seg, seg);
+          geo = new THREE.SphereGeometry(dims.r, seg, seg);
+          maxExtent = dims.r * 2;
           break;
         case 'cylinder':
-          geo = new THREE.CylinderGeometry(0.8, 0.8, 1.6, seg);
+          geo = new THREE.CylinderGeometry(dims.r, dims.r, dims.h, seg);
+          maxExtent = Math.max(dims.r * 2, dims.h);
           break;
         case 'cone':
-          geo = new THREE.ConeGeometry(1, 1.8, seg);
+          geo = new THREE.ConeGeometry(dims.r, dims.h, seg);
+          maxExtent = Math.max(dims.r * 2, dims.h);
           break;
         case 'pyramid':
-          geo = new THREE.ConeGeometry(1.1, 1.6, 4);
+          // 正四棱锥：ConeGeometry 的 radius 是底面正方形的外接圆半径
+          geo = new THREE.ConeGeometry(dims.r, dims.h, 4);
+          maxExtent = Math.max(dims.r * 2, dims.h);
           break;
         case 'box':
         default:
-          geo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
+          geo = new THREE.BoxGeometry(dims.a, dims.b, dims.c);
+          maxExtent = Math.max(dims.a, dims.b, dims.c);
           break;
       }
       const solid = new THREE.Mesh(geo, mat(0x4f7cff));
@@ -120,13 +136,18 @@ function buildParts(
 
       // 可拆解：叠加一个半透明「截面」部件，向上分离以观察内部
       if (desc.explodable) {
+        const slabW = maxExtent * 1.06;
+        const slabH = Math.max(maxExtent * 0.075, 0.02);
         const section = new THREE.Mesh(
-          new THREE.BoxGeometry(1.7, 0.12, 1.7),
+          new THREE.BoxGeometry(slabW, slabH, slabW),
           new THREE.MeshStandardMaterial({ color: 0xff7a59, transparent: true, opacity: 0.85 }),
         );
         section.position.set(0, 0, 0);
         addPart(section, [0, 1, 0]);
       }
+
+      // 统一缩放：保证「标注的数字」与「画出来的比例」一致（不同尺寸视觉大小恒定）
+      group.scale.setScalar(3 / (maxExtent || 1));
       break;
     }
 
@@ -220,7 +241,7 @@ function buildParts(
   return { group, parts };
 }
 
-export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Element {
+export function ThreeViewer({ scene, height = 420, bodyText = '' }: ThreeViewerProps): JSX.Element {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [exploded, setExploded] = useState(false);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
@@ -239,6 +260,19 @@ export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Elem
   const unsupported = !isSceneKindSupported(scene?.type);
   /** 不支持类型的中文名（用于诚实提示，不让教师以为是自己的操作问题）。 */
   const kindLabel = SCENE_KIND_LABEL[String(scene?.type ?? '')] ?? String(scene?.type ?? '未知类型');
+
+  /**
+   * 几何确定性自检（仅 geometry）：标注值一律按 params 重算，
+   * 与 AI 原标注 / 正文冲突时剔除该标注——宁缺毋错。
+   */
+  const geoCheck = useMemo(
+    () => (scene?.type === 'geometry' ? checkGeometry(scene, bodyText) : null),
+    [scene, bodyText],
+  );
+  /** 最终展示的标注（geometry 走计算值，molecule 沿用 AI 的部件名）。 */
+  const displayAnnotations: readonly string[] = geoCheck
+    ? geoCheck.annotations
+    : (scene?.annotations ?? []);
 
   useEffect(() => {
     let disposed = false;
@@ -428,6 +462,48 @@ export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Elem
 
   return (
     <Box>
+      {/* ---- 几何确定性保障：让老师知道有这层校正，而不是被静默改掉 ---- */}
+      {geoCheck?.degradedReason ? (
+        <Box
+          sx={{
+            mb: 1,
+            px: 1.5,
+            py: 1,
+            borderRadius: 2,
+            border: '1px dashed',
+            borderColor: 'warning.main',
+            bgcolor: '#FFF8E6',
+          }}
+        >
+          <Typography sx={{ fontSize: 13, color: '#6B4E00' }}>⚠ {geoCheck.degradedReason}</Typography>
+        </Box>
+      ) : null}
+      {geoCheck?.corrected ? (
+        <Box
+          sx={{
+            mb: 1,
+            px: 1.5,
+            py: 1,
+            borderRadius: 2,
+            border: '1px solid',
+            borderColor: 'info.main',
+            bgcolor: 'rgba(47,107,255,0.06)',
+          }}
+        >
+          <Typography sx={{ fontSize: 13.5, fontWeight: 700, color: 'primary.main' }}>
+            标注已按几何关系自动校正
+          </Typography>
+          <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mt: 0.25, lineHeight: 1.7 }}>
+            模型上的数值由平台按几何公式重新计算，不采用 AI 直接给出的数值。
+            {geoCheck.droppedAiAnnotations.length > 0
+              ? `已剔除 ${geoCheck.droppedAiAnnotations.length} 条与计算结果不一致的原标注。`
+              : ''}
+            {geoCheck.droppedByBody.length > 0
+              ? `另有 ${geoCheck.droppedByBody.length} 个量与正文数值不一致，已不予展示。`
+              : ''}
+          </Typography>
+        </Box>
+      ) : null}
       <Box
         ref={mountRef}
         sx={{
@@ -500,6 +576,38 @@ export function ThreeViewer({ scene, height = 420 }: ThreeViewerProps): JSX.Elem
           拖拽旋转 · 滚轮缩放
         </Typography>
       </Stack>
+
+      {/* ---- 数值标注列表（geometry 时全部来自确定性计算）---- */}
+      {displayAnnotations.length > 0 ? (
+        <Box sx={{ mt: 1.25 }}>
+          <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: 'text.secondary', mb: 0.5 }}>
+            {geoCheck
+              ? `${GEO_SHAPE_LABEL[geoCheck.shape]}·数值标注（按几何公式计算）`
+              : '部件标注'}
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {displayAnnotations.map((a, i) => (
+              <li key={`geo-anno-${i}`}>
+                <Typography
+                  sx={{
+                    fontSize: 13.5,
+                    lineHeight: 1.8,
+                    color: 'text.primary',
+                    fontFamily: geoCheck ? 'ui-monospace, Menlo, Consolas, monospace' : 'inherit',
+                  }}
+                >
+                  {a}
+                </Typography>
+              </li>
+            ))}
+          </Box>
+          {geoCheck && !geoCheck.dims.fromParams ? (
+            <Typography sx={{ fontSize: 12, color: 'text.secondary', mt: 0.5 }}>
+              （AI 未给出尺寸参数，以上按单位尺寸计算；如需具体数值，请在生成需求里写明，如「底面半径 3、高 5 的圆柱」）
+            </Typography>
+          ) : null}
+        </Box>
+      ) : null}
     </Box>
   );
 }
