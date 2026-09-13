@@ -43,6 +43,39 @@ const MODEL_TIMEOUT_MS = 120_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
 
+/**
+ * 「超范围需求」关键词：一次要生成整学期 / 全册 / 整个单元的内容。
+ *
+ * 背景（docs/QUALITY_BASELINE.md ③ 问题 1）：按次计费下，这类请求**不会**多烧钱
+ * （输出被 maxOutputTokens 硬顶），但会有两种伤害体验的结局：
+ *   A. JSON 被截断 → 校验失败 → 重试 → 仍失败 → 退款（教师白等 1~2 分钟）；
+ *   B. 模型压缩成 20 行提纲塞进上限 → 校验通过、**正常扣积分** → 教师拿到"看起来成功了"的垃圾。
+ * 与其让它跑到 B，不如**在扣积分之前就拦下来**，秒回中文提示。
+ */
+const OUT_OF_SCOPE_PATTERNS: readonly RegExp[] = [
+  /整学[期年]/,
+  /全[册本]?\s*(学[期年]|教材|课本)/,
+  /整个?单元/,
+  /全套/,
+  /[一1]学期/,
+  /所有课时/,
+  /全部课时/,
+  /[1-9]\d*\s*-\s*[1-9]\d*\s*课/,
+];
+
+/** 超范围时的中文提示（不扣积分，直接 422 返回）。 */
+const OUT_OF_SCOPE_MESSAGE =
+  '一次只能生成一节课（1 课时）的内容哦。请指定具体课时，例如「二次函数图像与性质 第1课时」，这样生成质量更高，也不浪费积分。';
+
+/**
+ * 判断需求是否超出「一次一课时」的范围。
+ *
+ * @param prompt 教师原始需求。
+ */
+function isOutOfScopePrompt(prompt: string): boolean {
+  return OUT_OF_SCOPE_PATTERNS.some((re) => re.test(prompt));
+}
+
 interface GenerateBody {
   prompt?: string;
   appType?: string;
@@ -87,6 +120,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const category = body.category === 'doc' ? 'doc' : 'app';
+
+  // ---- 范围护栏：一次只生成一课时（**在预扣积分之前**，命中不扣积分、秒回）----
+  // 详见 docs/QUALITY_BASELINE.md ③ 问题 1：不拦的话会退化成"压缩成提纲却正常扣费"。
+  if (category === 'doc' && isOutOfScopePrompt(prompt)) {
+    return jsonError(422, { code: 'VALIDATE_FAILED', message: OUT_OF_SCOPE_MESSAGE });
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
