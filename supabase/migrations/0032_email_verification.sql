@@ -11,6 +11,7 @@
 --    service_role（Edge Function）自动绕过 RLS 正常读写；
 --    security definer 触发器以表主身份执行，同样不受影响。
 create table if not exists public.email_verifications (
+  id          uuid primary key default gen_random_uuid(),
   email       text not null,
   code_hash   text not null,
   expires_at  timestamptz not null,
