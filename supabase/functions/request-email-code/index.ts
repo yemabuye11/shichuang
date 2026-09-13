@@ -17,7 +17,7 @@
 import { handleCors } from '../_shared/cors.ts';
 import { jsonError, jsonOk } from '../_shared/json.ts';
 import { adminClient } from '../_shared/supabaseAdmin.ts';
-import { sendEmail } from '../_shared/email.ts';
+import { sendEmail } from '../_shared/email/index.ts';
 
 /** 邮箱格式校验。 */
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
