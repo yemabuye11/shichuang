@@ -88,7 +88,14 @@ git push -u origin main
 首推时 1.6/1.7 往往还没做，首次 workflow 会红叉。配好后：
 仓库 → Actions → 最新的 run → **Re-run all jobs**。绿勾即成功（约 2–3 分钟）。
 
-### 1.9 验证（4 项）
+### 1.9 开第一道门：建首个管理员 + 邀请码（部署后必做，否则谁都登不进）
+> ⚠️ **上线时最容易漏的一步**。数据库默认**没有任何账号、没有任何邀请码**；而注册必须填邀请码、邀请码又只能管理员生成 → 卡死。必须先用 SQL 开这第一道门（完整脚本见 `docs/BOOTSTRAP_FIRST_ADMIN.sql`）。
+1. Supabase → SQL Editor 跑引导邀请码插入（见 BOOTSTRAP 文件 Step 1：`insert ... 'SHICHUANG'`）。
+2. 网站注册（邮箱+密码+邀请码 `SHICHUANG`）→ 建好你的普通账号（初始 100 积分）。若 github.io 打不开，改用 Supabase 后台 Auth → Add user 并在 User Metadata 填 `{"invite_code":"SHICHUANG"}`。
+3. Supabase → SQL Editor 把你自己升为管理员（见 BOOTSTRAP 文件 Step 3，邮箱换成你注册的）。
+4. 重新登录，后台出现「管理员」入口 → 生成教师邀请码（kind=invite）批量发。
+
+### 1.10 验证（4 项）
 - [ ] 首页 `https://yemabuye11.github.io/shichuang/` 正常显示
 - [ ] 注册（**需邀请码**，先用后台生成的）
 - [ ] 生成一份教案/PPT，是真内容非 mock
