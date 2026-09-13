@@ -159,8 +159,35 @@ export function PasswordForm({
     }
   };
 
+  // 统一由 form 的 submit 事件驱动（而不是给每个按钮挂 onClick），好处：
+  //  1. 输入框里按「回车」也能走对应步骤（以前 onSubmit 只有 preventDefault，回车毫无反应，
+  //     用户以为没成功，容易误以为"注册没跳到下一步"）；
+  //  2. 点击与回车走同一条路径，不会重复触发。
+  const handleSubmit = (): void => {
+    if (!isSignUp) {
+      void submitSignIn();
+      return;
+    }
+    if (step === 'register') {
+      void submitSignUp();
+      return;
+    }
+    if (emailSent) {
+      void verifyCode();
+      return;
+    }
+    void sendCode();
+  };
+
   return (
-    <Stack spacing={1.75} component="form" onSubmit={(e) => { e.preventDefault(); }}>
+    <Stack
+      spacing={1.75}
+      component="form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSubmit();
+      }}
+    >
       {error ? <Alert severity="error">{error}</Alert> : null}
 
       {isSignUp ? (
@@ -177,10 +204,10 @@ export function PasswordForm({
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
               />
               <Button
+                type="submit"
                 variant="outlined"
                 size="large"
                 disabled={sending || cooldownSec > 0}
-                onClick={() => void sendCode()}
                 sx={{ minHeight: 50 }}
               >
                 {sending ? '请稍候…' : cooldownSec > 0 ? `重新获取（${cooldownSec}s）` : '获取验证码'}
@@ -200,10 +227,10 @@ export function PasswordForm({
                     sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
                   />
                   <Button
+                    type="submit"
                     variant="contained"
                     size="large"
                     disabled={verifying}
-                    onClick={() => void verifyCode()}
                     sx={{ minHeight: 50 }}
                   >
                     {verifying ? '请稍候…' : '验证'}
@@ -231,10 +258,10 @@ export function PasswordForm({
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
               />
               <Button
+                type="submit"
                 variant="contained"
                 size="large"
                 disabled={isSubmitting}
-                onClick={() => void submitSignUp()}
                 sx={{ minHeight: 50, mt: 0.5 }}
               >
                 {isSubmitting ? '请稍候…' : '注册并登录'}
@@ -267,7 +294,6 @@ export function PasswordForm({
             variant="contained"
             size="large"
             disabled={isSubmitting}
-            onClick={() => void submitSignIn()}
             sx={{ minHeight: 50, mt: 0.5 }}
           >
             {isSubmitting ? '请稍候…' : '登录'}
@@ -279,6 +305,7 @@ export function PasswordForm({
         <Button
           variant="text"
           size="large"
+          type="button"
           onClick={() => {
             setError('');
             setStep('email');
