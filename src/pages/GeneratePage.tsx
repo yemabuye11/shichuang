@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { PromptInput } from '@/components/generate/PromptInput';
 import { TypeSelector } from '@/components/generate/TypeSelector';
 import { CategoryEntry } from '@/components/generate/CategoryEntry';
@@ -66,6 +66,7 @@ export function GeneratePage(): JSX.Element {
   const { start } = useGenerate();
   const { versions, options } = useTextbook();
   const [params] = useSearchParams();
+  const location = useLocation();
 
   const [prompt, setPrompt] = useState('');
   const [category, setCategory] = useState<Category>('app');
@@ -231,15 +232,20 @@ export function GeneratePage(): JSX.Element {
   return (
     <Box sx={{ py: { xs: 2, sm: 3.5 }, maxWidth: 760, mx: 'auto' }}>
       {/* ---- 顶部返回 ---- */}
-      <Button
-        variant="text"
-        size="large"
-        startIcon={<ArrowBackIcon />}
-        onClick={() => navigate(-1)}
-        sx={{ minHeight: 44, color: 'text.secondary', mb: 1 }}
-      >
-        返回
-      </Button>
+      {/* 登录后 `/` 直接就是制作页（见 router.tsx 的 HomeOrGenerate），此时点「返回」
+          执行 navigate(-1) 会直接退出站点，所以在根路径隐藏该按钮；
+          从 /generate 等路径进来时照旧显示。 */}
+      {location.pathname === '/' ? null : (
+        <Button
+          variant="text"
+          size="large"
+          startIcon={<ArrowBackIcon />}
+          onClick={() => navigate(-1)}
+          sx={{ minHeight: 44, color: 'text.secondary', mb: 1 }}
+        >
+          返回
+        </Button>
+      )}
 
       <Typography sx={{ fontSize: { xs: 22, sm: 26 }, fontWeight: 800, lineHeight: 1.35 }}>
         你想生成什么？

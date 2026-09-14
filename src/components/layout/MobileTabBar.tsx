@@ -4,24 +4,35 @@ import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
 import { ROUTES } from '@/config/routes';
 
 /**
  * 移动端底部 TabBar（≥48px 触控高度 + 安全区适配）。
  *
  * 只在 <600px 显示；桌面由 `TopNav` 承担导航。
+ *
+ * 登录后 `/` 已经是制作页（见 `router.tsx` 的 HomeOrGenerate），因此：
+ * - 隐藏「生成」tab，避免和「制作」入口重复打架；
+ * - 首个 tab 文案由「首页」改为「制作」，避免误导（它的 value 仍是 `ROUTES.HOME`，
+ *   不改动路由常量与指向）。
+ * 未登录时保持原样（显示「首页」→ 营销首页 + 「生成」tab）。
  */
 export function MobileTabBar(): JSX.Element {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
 
+  const isLoggedIn = user !== null;
   const path = location.pathname;
+  // 登录后「生成」tab 已隐藏，此时 /generate 与 / 都归到「制作」tab 高亮，
+  // 避免出现「没有任何 tab 被选中」的空档。
   const value =
     path.startsWith(ROUTES.SQUARE) || path.startsWith(ROUTES.APP_RUN)
       ? ROUTES.SQUARE
       : path.startsWith('/me')
         ? ROUTES.ME
-        : path.startsWith(ROUTES.GENERATE)
+        : !isLoggedIn && path.startsWith(ROUTES.GENERATE)
           ? ROUTES.GENERATE
           : ROUTES.HOME;
 
@@ -49,16 +60,19 @@ export function MobileTabBar(): JSX.Element {
       >
         <BottomNavigationAction
           value={ROUTES.HOME}
-          label="首页"
+          label={isLoggedIn ? '制作' : '首页'}
           icon={<HomeOutlinedIcon />}
-          aria-label="首页"
+          aria-label={isLoggedIn ? '制作' : '首页'}
         />
-        <BottomNavigationAction
-          value={ROUTES.GENERATE}
-          label="生成"
-          icon={<AutoAwesomeOutlinedIcon />}
-          aria-label="生成应用"
-        />
+        {/* 已登录时 `/` 已是制作页，隐藏此入口避免重复 */}
+        {isLoggedIn ? null : (
+          <BottomNavigationAction
+            value={ROUTES.GENERATE}
+            label="生成"
+            icon={<AutoAwesomeOutlinedIcon />}
+            aria-label="生成应用"
+          />
+        )}
         <BottomNavigationAction
           value={ROUTES.SQUARE}
           label="广场"
