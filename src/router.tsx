@@ -3,6 +3,7 @@ import { createBrowserRouter } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { RequireAuth } from '@/components/layout/RequireAuth';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
+import { useAuth } from '@/hooks/useAuth';
 import NotFoundPage from '@/pages/NotFoundPage';
 import { ROUTES } from '@/config/routes';
 
@@ -11,6 +12,10 @@ import { ROUTES } from '@/config/routes';
  *
  * P0-A3 硬性：`/`、`/square`、`/app/:id` 全部免登录；
  * 只有 `/generate`、`/generating`、`/me`、`/me/apps`、`/admin` 需要登录。
+ *
+ * `/` 首页分流（野马需求：主界面就是制作页）：
+ * - 已登录 → 直接渲染制作页 GeneratePage，老师进来就能一句话开工；
+ * - 未登录 → 渲染营销首页 HomePage（Hero / 核心亮点 / 底部 CTA），用于对外展示与引流。
  */
 
 // 首屏直接加载（体积极小）
@@ -39,12 +44,30 @@ function withSuspense(node: JSX.Element): JSX.Element {
   return <Suspense fallback={<InlineLoading />}>{node}</Suspense>;
 }
 
+/**
+ * 首页 `/` 的登录态分流器。
+ *
+ * - 已登录 → 制作页（GeneratePage）：一句话输入 + 类型选择 + 生成按钮全部可用；
+ * - 未登录 → 营销首页（HomePage）：保持 Hero / 核心亮点 / 底部 CTA 不变。
+ *
+ * 复用同一个 GeneratePage 组件，不复制其代码；`/generate` 路由原样保留，
+ * 已有书签 / 分享链接不会失效。
+ */
+function HomeOrGenerate(): JSX.Element {
+  const { user, loading } = useAuth();
+
+  // 登录态尚未确定时先占位，避免已登录用户先闪一下营销首页再跳走。
+  if (loading) return <InlineLoading />;
+
+  return user ? withSuspense(<GeneratePage />) : withSuspense(<HomePage />);
+}
+
 const routes = [
   {
     path: ROUTES.HOME,
     element: <AppShell />,
     children: [
-      { index: true, element: withSuspense(<HomePage />) },
+      { index: true, element: <HomeOrGenerate /> },
       {
         path: 'generate',
         element: (
