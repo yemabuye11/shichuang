@@ -16,6 +16,7 @@ import { PromptInput } from '@/components/generate/PromptInput';
 import { TypeSelector } from '@/components/generate/TypeSelector';
 import { ExampleChips } from '@/components/generate/ExampleChips';
 import { AppCard } from '@/components/square/AppCard';
+import { OpenCoursesSection } from '@/components/home/OpenCoursesSection';
 import { AiDisclaimer } from '@/components/common/AiDisclaimer';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
@@ -496,6 +497,9 @@ export function HomePage(): JSX.Element {
           ))}
         </Box>
       </Box>
+
+      {/* ================= 公开课资源（外链索引板块） ================= */}
+      <OpenCoursesSection />
 
       {/* ================= 备课入口区（四/五类一键入口，UI-1） ================= */}
       <Box sx={{ mt: { xs: 5, sm: 7 } }}>
