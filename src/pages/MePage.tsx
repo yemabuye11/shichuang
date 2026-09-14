@@ -292,5 +292,6 @@ export function MePage(): JSX.Element {
       </Dialog>
     </Box>
   );
+}
 
 export default MePage;
