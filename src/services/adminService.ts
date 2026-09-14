@@ -332,6 +332,70 @@ export async function upsertModel(model: ModelConfigInput): Promise<void> {
   if (error) throw new AppError('FORBIDDEN', error.message, error);
 }
 
+/** 后台「内容类型积分」面板的一行（数值一律来自云端 `app_type_profiles`）。 */
+export interface AppTypeConfigRow {
+  /** 类型枚举值，如 `lesson_plan` / `teaching_game`。 */
+  appType: string;
+  /** 中文显示名。 */
+  label: string;
+  /** 当前单次生成消耗积分数（来自数据库，前端不写死）。 */
+  creditCost: number;
+  /** 是否启用。 */
+  enabled: boolean;
+  /** 排序权重。 */
+  sortOrder: number;
+  /**
+   * 模型路由覆盖（可为 null）。
+   *
+   * ⚠️ 必须原样回传给 `admin_upsert_app_type`：该 RPC 里是
+   * `model_override = p_model_override`（无条件覆盖），
+   * 不回传等于把已配置的模型路由清空。
+   */
+  modelOverride: string | null;
+  /** `doc_type:` 开头为文档类，其余为应用类（仅用于面板分组显示）。 */
+  group: 'doc' | 'app';
+}
+
+/**
+ * 列出全部内容类型及其积分消耗（后台「内容类型积分」面板用）。
+ *
+ * 直接读 `app_type_profiles` 表（RLS 已对 authenticated 开放 enabled 行的 select），
+ * **数值全部来自数据库**，前端不内置任何价格表。
+ *
+ * 注意：RLS 策略为 `using (enabled)`，因此已被停用的类型不会出现在列表里。
+ */
+export async function listAppTypes(): Promise<AppTypeConfigRow[]> {
+  // 演示模式没有云端配置表，返回空列表，由面板给出说明（避免把本地兜底值当真相展示）
+  if (isMockMode()) return [];
+
+  const sb = requireBackend();
+  const { data, error } = await sb
+    .from('app_type_profiles')
+    .select('app_type, label, credit_cost, prompt_key, sort_order, enabled, model_override')
+    .order('sort_order', { ascending: true });
+  if (error) throw new AppError('FORBIDDEN', error.message, error);
+
+  const rows = (data ?? []) as unknown as {
+    app_type: string;
+    label: string;
+    credit_cost: number;
+    prompt_key: string | null;
+    sort_order: number;
+    enabled: boolean;
+    model_override: string | null;
+  }[];
+
+  return rows.map((r): AppTypeConfigRow => ({
+    appType: String(r.app_type ?? ''),
+    label: String(r.label ?? r.app_type ?? ''),
+    creditCost: Number(r.credit_cost ?? 0),
+    enabled: r.enabled !== false,
+    sortOrder: Number(r.sort_order ?? 0),
+    modelOverride: r.model_override ?? null,
+    group: String(r.prompt_key ?? '').startsWith('doc_type:') ? 'doc' : 'app',
+  }));
+}
+
 /**
  * 配置某个应用类型的积分成本与模型路由。
  *

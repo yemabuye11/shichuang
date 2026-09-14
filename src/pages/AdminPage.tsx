@@ -15,6 +15,7 @@ import { UserList } from '@/components/admin/UserList';
 import { RechargeSettingsPanel } from '@/components/admin/RechargeSettingsPanel';
 import { RechargeRequestsPanel } from '@/components/admin/RechargeRequestsPanel';
 import { NoticeSettingsPanel } from '@/components/admin/NoticeSettingsPanel';
+import { AppTypeCreditsPanel } from '@/components/admin/AppTypeCreditsPanel';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
@@ -25,7 +26,9 @@ import type { AdminStats, MembershipPlan, ReportItem } from '@/types/models';
  * - Tab「概览」：数据看板、批量生成兑换码、举报处理与下架；
  * - Tab「注册用户」：查看注册用户列表（邮箱 / 昵称 / 注册时间 / 积分余额 / 生成次数），仅管理员可见；
  * - Tab「收款设置」：配置野马的个人微信 / 支付宝收款码 + 引导文案；
- * - Tab「待充值」：核对老师提交的充值凭证，一键到账（走 admin_approve_recharge）。
+ * - Tab「待充值」：核对老师提交的充值凭证，一键到账（走 admin_approve_recharge）；
+ * - Tab「公告设置」：系统公告 + 管理员微信号（走 system_config.system_notice）；
+ * - Tab「内容类型积分」：直接改各内容类型的单次生成积分消耗（走 admin_upsert_app_type）。
  *
  * 整个页面处于 `RequireAuth requireAdmin` 路由守卫内，非管理员看不到任何入口。
  */
@@ -102,7 +105,7 @@ export function AdminPage(): JSX.Element {
         <Box>
           <Typography sx={{ fontSize: { xs: 21, sm: 24 }, fontWeight: 800 }}>管理员后台</Typography>
           <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 0.25 }}>
-            发兑换码 · 看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置
+            发兑换码 · 看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置 · 积分单价
           </Typography>
         </Box>
       </Stack>
@@ -126,6 +129,7 @@ export function AdminPage(): JSX.Element {
         <Tab label="收款设置" />
         <Tab label="待充值" />
         <Tab label="公告设置" />
+        <Tab label="内容类型积分" />
       </Tabs>
 
       {tab === 0 ? (
@@ -173,9 +177,13 @@ export function AdminPage(): JSX.Element {
         <Box sx={{ mt: 3 }}>
           <RechargeRequestsPanel />
         </Box>
-      ) : (
+      ) : tab === 4 ? (
         <Box sx={{ mt: 3 }}>
           <NoticeSettingsPanel />
+        </Box>
+      ) : (
+        <Box sx={{ mt: 3 }}>
+          <AppTypeCreditsPanel />
         </Box>
       )}
     </Box>

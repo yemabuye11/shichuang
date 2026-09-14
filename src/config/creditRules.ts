@@ -55,8 +55,17 @@ export const GENERATION_STAGES = [
 
 export type GenerationStageKey = (typeof GENERATION_STAGES)[number]['stage'];
 
-/** 积分说明文案（一句话人话解释规则，UI-6 底部）。 */
-export const CREDIT_RULE_TEXT = '1 积分 ≈ 1 次普通生成，复杂应用（游戏/动画）消耗更多。';
+/**
+ * 积分说明文案（一句话人话解释规则，UI-6 底部 / 顶部积分徽标 tooltip）。
+ *
+ * ⚠️ 红线：**不出现任何具体数字**。各内容类型的实际消耗一律以
+ * `app_type_profiles.credit_cost`（配置表，管理员可在后台改）为准，
+ * 文案里写死数字会在调价后立刻变成错误信息。
+ * 本常量「涨价 / 降价后都成立」，只需说明规则本身。
+ */
+export const CREDIT_RULE_TEXT =
+  '不同类型的内容消耗积分不同，内容越复杂（如 3D 课件、教学游戏、动画）消耗越多；' +
+  '生成前会在生成页显示本次预计消耗，以那里显示的数字为准。';
 
 /** 余额不足时的引导文案（P0-F4）。 */
 export const INSUFFICIENT_CREDITS_HINT = '可以用兑换码充值，或联系管理员为你加积分。';
