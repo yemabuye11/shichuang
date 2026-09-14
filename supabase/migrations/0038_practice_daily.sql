@@ -13,7 +13,7 @@
 --      不调用 reserve_credits / settle_generation / refund_generation（积分由 Edge 侧结算，
 --      本文件只建数据与判分层）；
 --   4) 幂等：create ... if not exists / drop ... if exists + create / on conflict do update /
---      枚举加值用 do $$ ... exception when others then null 兜底，整段反复粘贴运行不报错。
+--      整段反复粘贴运行不报错；枚举加值（daily_practice）已拆到 0038a 单独提交，避免 55P04。
 --
 -- 答案安全（验收清单第 4 条）：
 --   * practice_questions.answer / explanation 只存服务端；
@@ -27,16 +27,11 @@
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- 0. 枚举补充：app_type_enum 增加 'daily_practice'（幂等）
---    app_type_profiles 的 PK 是 public.app_type_enum，必须先成为合法枚举值才能写定价行。
---    写法照 0034 / 0035：do $$ ... exception when others then null $$。
+-- 0. ⚠️ 前置依赖：枚举值 'daily_practice' 已由 **0038a_enum_daily_practice.sql**
+--    单独提交（PostgreSQL 要求枚举值先提交才能被本文件的 insert 使用，否则报 55P04）。
+--    运行顺序：**先跑 0038a → 再跑本文件 0038 → 最后跑 0039**。三者均可反复重跑。
+--    下方 app_type_profiles 的 PK 是 public.app_type_enum，枚举值已存在才写定价行。
 -- ---------------------------------------------------------------------------
-do $$
-begin
-  alter type public.app_type_enum add value if not exists 'daily_practice';
-exception
-  when others then null;
-end $$;
 
 -- ---------------------------------------------------------------------------
 -- 1. 内容类型定价：每日一练 = 1 积分 / 天（基准价）
@@ -922,8 +917,10 @@ end $$;
 --   1. 幂等：全文只有 `create table if not exists` / `create index if not exists` /
 --      `create or replace function` / `drop X if exists + create X` / `on conflict do update`，
 --      枚举加值包在 do $$ exception when others then null $$ 里 → 整段反复粘贴运行不报错。
---   2. 枚举：新增值 `daily_practice` 在同一文件内被用于 app_type_profiles 的 insert
---      （与 0012:71-91 的既有写法一致，该迁移客户已在 Supabase SQL Editor 跑通）。
+--   2. 枚举：新增值 `daily_practice` 已由 **0038a_enum_daily_practice.sql** 单独提交
+--      （PostgreSQL 要求枚举值先提交才能被本文件的 insert 使用，否则触发 55P04；
+--       Supabase SQL Editor 把整段当单事务，故必须拆成 0038a 先跑）。本文件只引用它，
+--       app_type_profiles 的 insert 不再在同一脚本内加枚举值。
 --   3. 去敏：get_practice_for_student 的 returns table 只有
 --      practice_id/title/grade/subject/chapter/day_count/status/day_no/seq/qtype/stem/options，
 --      **没有任何 answer / explanation 字段**；且 where 限定 status='published'。
