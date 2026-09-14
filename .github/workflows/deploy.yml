@@ -101,3 +101,86 @@ jobs:
         run: supabase functions deploy generate --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # 自动跑数据库迁移（supabase db push）。
+  # 你之前都是用 SQL Editor 建表，所以迁移跟踪表是空的 —— 直接 db push 会以为
+  # 0001-0035 都没建过、从头重跑，撞上已存在的对象就报错。
+  # 这里先用 `migration repair --status applied` 把已存在的 0001-0035 标记为「已应用」
+  # （只改跟踪表、不重跑 SQL），之后 db push 就只会跑将来的新迁移（0036+），安全且幂等。
+  #
+  # 前置条件（只需配一次）：在仓库 Secrets 里再加：
+  #   - SUPABASE_DB_PASSWORD ：Supabase 控制台 Project Settings → Database 里的数据库密码
+  #     （和 SUPABASE_ACCESS_TOKEN / SUPABASE_PROJECT_REF 一起，共 3 个密钥）
+  # ---------------------------------------------------------------------------
+  deploy-db:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link Supabase project
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      - name: Bootstrap migration tracking (idempotent, one-time effect)
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          VERSIONS=(
+            0001_extensions_enums
+            0002_profiles_credit
+            0003_apps
+            0004_social_views_likes_reports
+            0005_prompt_templates_model_profiles
+            0006_system_config_seed
+            0007_jobs_daily_events
+            0008_rpc_credit
+            0009_rpc_apps_social_admin
+            0010_rls_policies
+            0011_seed_prompt_templates
+            0012_category_and_docs
+            0013_textbook_versions
+            0014_textbook_knowledge
+            0015_rls_docs_textbook
+            0016_seed_doc_prompts
+            0017_doc_library
+            0018_doc_storage_rls
+            0019_doc_credit_cost
+            0020_credit_expiry
+            0021_admin_users
+            0022_recharge_self
+            0023_3d_scope
+            0024_doc_prompt_fix
+            0025_generation_guardrails
+            0026_chart_block
+            0027_geometry_kernel
+            0028_lesson_plan_higher_order
+            0029_credit_cost_double
+            0030_siliconflow_provider
+            0031_storage_apps_html
+            0032_email_verification
+            0033_email_verification_id
+            0034_teacher_resources
+            0035_content_library_market
+          )
+          for v in "${VERSIONS[@]}"; do
+            supabase migration repair --status applied "$v" || true
+          done
+
+      - name: Push new migrations
+        run: supabase db push
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
