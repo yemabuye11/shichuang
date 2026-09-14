@@ -9,7 +9,8 @@ import '@/styles/mui-overrides.css';
 /**
  * 应用入口。
  *
- * PWA：`registerType:'autoUpdate'`，有新版本时自动激活并在下次刷新生效。
+ * PWA：`registerType:'prompt'`（vite.config.ts 中配置），有新版本时**不自动刷新**，
+ * 只在用户手动刷新时生效，避免正在填表（注册/验证码）的用户被静默踢回登录界面。
  */
 
 const container = document.getElementById('root');

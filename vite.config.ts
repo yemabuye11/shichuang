@@ -18,7 +18,10 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       VitePWA({
-        registerType: 'autoUpdate',
+        // ⚠️ 用 prompt 而非 autoUpdate：autoUpdate 会在检测到新版本时**静默刷新页面**，
+        // 正在填注册表/验证码的用户会被直接踢回登录界面、表单数据全丢（野马 2026-09-14 实测）。
+        // prompt 模式下新版本只在用户**手动刷新**时生效，绝不打断正在进行的操作。
+        registerType: 'prompt',
         includeAssets: ['favicon.svg', 'icons/*.png'],
         // 仅预缓存 App Shell，绝不预缓存业务数据（广场列表 / 应用 HTML）
         workbox: {
