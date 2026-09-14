@@ -339,6 +339,26 @@ export function MePage(): JSX.Element {
               >
                 兑换码充值
               </Button>
+              <Button
+                variant="outlined"
+                size="large"
+                fullWidth
+                startIcon={<LibraryBooksOutlinedIcon />}
+                onClick={() => navigate(ROUTES.PRACTICE_MANAGE)}
+                sx={{ minHeight: 48, borderRadius: 2.5, justifyContent: 'flex-start' }}
+              >
+                每日一练（我的练习）
+              </Button>
+              <Button
+                variant="outlined"
+                size="large"
+                fullWidth
+                startIcon={<AutoAwesomeOutlinedIcon />}
+                onClick={() => navigate(ROUTES.PRACTICE_NEW)}
+                sx={{ minHeight: 48, borderRadius: 2.5, justifyContent: 'flex-start' }}
+              >
+                创建每日一练
+              </Button>
               {isAdmin ? (
                 <Button
                   variant="outlined"

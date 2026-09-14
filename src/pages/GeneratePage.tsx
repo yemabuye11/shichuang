@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
+  Card,
+  CardContent,
   Checkbox,
   Chip,
   Divider,
@@ -253,8 +255,37 @@ export function GeneratePage(): JSX.Element {
       <Typography sx={{ fontSize: 15, color: 'text.secondary', mt: 0.75, lineHeight: 1.7 }}>
         {remixId
           ? `已参考别人的作品，改改提示词就能变成你自己的版本。`
-          : `用一句话描述，${brand.name} 会生成可以直接用的小应用或备课文档。`}
+          : `用一句话描述，${brand.name}           会生成可以直接用的小应用或备课文档。`}
       </Typography>
+
+      {/* ---- 每日一练引导卡 ---- */}
+      <Card elevation={0} sx={{ borderRadius: 3, border: '1px solid', borderColor: 'divider', bgcolor: '#fff', p: 2.5 }}>
+        <CardContent sx={{ p: 0, '&:last-child': { pb: 0 } }}>
+          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 0.5 }}>
+            <AutoAwesomeIcon color="primary" sx={{ fontSize: 22 }} aria-hidden="true" />
+            <Typography sx={{ fontSize: 17, fontWeight: 700 }}>每日一练</Typography>
+          </Stack>
+          <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mb: 2, lineHeight: 1.7 }}>
+            生成一套选择题 / 填空题练习，发链接让学生做，自动统计正确率。
+          </Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <Button
+              variant="contained"
+              onClick={() => navigate(ROUTES.PRACTICE_NEW)}
+              sx={{ minHeight: 44, fontWeight: 700 }}
+            >
+              创建练习
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => navigate(ROUTES.PRACTICE_MANAGE)}
+              sx={{ minHeight: 44, borderRadius: 2.5 }}
+            >
+              我的练习
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
 
       <Stack spacing={2.5} sx={{ mt: 2.5 }}>
         {/* ---- PRIMARY 输入：大文本框（始终在最前，不做向导包裹） ---- */}

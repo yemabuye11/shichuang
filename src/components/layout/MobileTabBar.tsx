@@ -3,6 +3,7 @@ import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { ROUTES } from '@/config/routes';
@@ -28,13 +29,15 @@ export function MobileTabBar(): JSX.Element {
   // 登录后「生成」tab 已隐藏，此时 /generate 与 / 都归到「制作」tab 高亮，
   // 避免出现「没有任何 tab 被选中」的空档。
   const value =
-    path.startsWith(ROUTES.SQUARE) || path.startsWith(ROUTES.APP_RUN)
-      ? ROUTES.SQUARE
-      : path.startsWith('/me')
-        ? ROUTES.ME
-        : !isLoggedIn && path.startsWith(ROUTES.GENERATE)
-          ? ROUTES.GENERATE
-          : ROUTES.HOME;
+    path.startsWith('/practice') || path.startsWith('/p')
+      ? 'practice'
+      : path.startsWith(ROUTES.SQUARE) || path.startsWith(ROUTES.APP_RUN)
+        ? ROUTES.SQUARE
+        : path.startsWith('/me')
+          ? ROUTES.ME
+          : !isLoggedIn && path.startsWith(ROUTES.GENERATE)
+            ? ROUTES.GENERATE
+            : ROUTES.HOME;
 
   return (
     <Paper
@@ -84,6 +87,12 @@ export function MobileTabBar(): JSX.Element {
           label="我的"
           icon={<PersonOutlineIcon />}
           aria-label="我的"
+        />
+        <BottomNavigationAction
+          value="practice"
+          label="练习"
+          icon={<MenuBookIcon />}
+          aria-label="每日一练"
         />
       </BottomNavigation>
     </Paper>

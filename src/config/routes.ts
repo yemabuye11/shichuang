@@ -38,6 +38,12 @@ export const ROUTES = {
   RESOURCE_UPLOAD: '/resources/upload',
   /** 校本资源库：管理员审核台（需登录 + 管理员）。 */
   ADMIN_RESOURCES: '/admin/resources',
+  /** 每日一练：教师创建（需登录）。 */
+  PRACTICE_NEW: '/practice/new',
+  /** 每日一练：教师管理看板（需登录）。 */
+  PRACTICE_MANAGE: '/practice',
+  /** 每日一练：学生免登录作答（公开）。 */
+  PRACTICE_RUN: '/p',
 } as const;
 
 /**
@@ -95,4 +101,27 @@ export function docRunPath(docId: string): string {
  */
 export function docEditPath(docId: string): string {
   return `${ROUTES.DOC_RUN}/${encodeURIComponent(docId)}/edit`;
+}
+
+/**
+ * 拼接每日一练「创建」页路径（需登录）。
+ */
+export function practiceNewPath(): string {
+  return ROUTES.PRACTICE_NEW;
+}
+
+/**
+ * 拼接每日一练「管理」页路径（需登录）。
+ */
+export function practiceManagePath(): string {
+  return ROUTES.PRACTICE_MANAGE;
+}
+
+/**
+ * 拼接每日一练「作答」页路径（公开，学生免登录）。
+ *
+ * @param slug 练习分享 slug。
+ */
+export function practiceRunPath(slug: string): string {
+  return `${ROUTES.PRACTICE_RUN}/${encodeURIComponent(slug)}`;
 }

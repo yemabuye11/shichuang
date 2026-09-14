@@ -16,6 +16,7 @@ import { RechargeSettingsPanel } from '@/components/admin/RechargeSettingsPanel'
 import { RechargeRequestsPanel } from '@/components/admin/RechargeRequestsPanel';
 import { NoticeSettingsPanel } from '@/components/admin/NoticeSettingsPanel';
 import { AppTypeCreditsPanel } from '@/components/admin/AppTypeCreditsPanel';
+import { PracticeSettingsPanel } from '@/components/admin/PracticeSettingsPanel';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
@@ -129,6 +130,7 @@ export function AdminPage(): JSX.Element {
         <Tab label="收款设置" />
         <Tab label="待充值" />
         <Tab label="公告设置" />
+        <Tab label="每日一练配置" />
         <Tab label="内容类型积分" />
       </Tabs>
 
@@ -180,6 +182,10 @@ export function AdminPage(): JSX.Element {
       ) : tab === 4 ? (
         <Box sx={{ mt: 3 }}>
           <NoticeSettingsPanel />
+        </Box>
+      ) : tab === 5 ? (
+        <Box sx={{ mt: 3 }}>
+          <PracticeSettingsPanel />
         </Box>
       ) : (
         <Box sx={{ mt: 3 }}>

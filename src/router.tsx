@@ -39,6 +39,11 @@ const TeacherResourceUploadPage = lazy(() => import('@/pages/TeacherResourceUplo
 const AdminResourceReviewPage = lazy(() => import('@/pages/AdminResourceReviewPage'));
 const ContentLibraryPage = lazy(() => import('@/pages/ContentLibraryPage'));
 
+// 每日一练：学生免登录作答（公开）/ 教师创建 / 教师管理
+const PracticeRunPage = lazy(() => import('@/pages/PracticeRunPage').then((m) => ({ default: m.PracticeRunPage })));
+const PracticeCreatePage = lazy(() => import('@/pages/PracticeCreatePage'));
+const PracticeManagePage = lazy(() => import('@/pages/PracticeManagePage').then((m) => ({ default: m.PracticeManagePage })));
+
 /** 懒加载包裹器。 */
 function withSuspense(node: JSX.Element): JSX.Element {
   return <Suspense fallback={<InlineLoading />}>{node}</Suspense>;
@@ -86,6 +91,22 @@ const routes = [
       { path: 'd/:id', element: withSuspense(<DocRunPage />) },
       // 公开：文档在线编辑页（UI-5 / T08，复用 DocModel 源，编辑后存新版本）
       { path: 'd/:id/edit', element: withSuspense(<DocEditorPage />) },
+      // 每日一练：学生免登录作答（公开）
+      { path: 'p/:slug', element: withSuspense(<PracticeRunPage />) },
+      // 每日一练：教师创建（需登录）
+      {
+        path: 'practice/new',
+        element: (
+          <RequireAuth>{withSuspense(<PracticeCreatePage />)}</RequireAuth>
+        ),
+      },
+      // 每日一练：教师管理看板（需登录）
+      {
+        path: 'practice',
+        element: (
+          <RequireAuth>{withSuspense(<PracticeManagePage />)}</RequireAuth>
+        ),
+      },
       { path: 'square', element: withSuspense(<SquarePage />) },
       {
         path: 'me',
