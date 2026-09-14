@@ -72,3 +72,32 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # ---------------------------------------------------------------------------
+  # 自动部署 Supabase Edge Function（内容生成核心 generate）。
+  # 之前这步要你本机手动跑 / 在 Dashboard 粘代码；现在 push 即自动部署。
+  #
+  # 前置条件（只需配一次）：在仓库 Settings → Secrets and variables → Actions 里加：
+  #   - SUPABASE_ACCESS_TOKEN  ：Supabase 控制台 User Settings → Access Tokens 生成一个
+  #   - SUPABASE_PROJECT_REF   ：项目 ref（就是项目 URL 里的那段，如 mmhoztwicjrxkcjfwrjk）
+  # 函数运行所需的密钥（DEEPSEEK_API_KEY / SUPABASE_SERVICE_ROLE_KEY 等）仍走项目自身
+  # 的 Secret Store（Dashboard → Edge Functions → 函数的 Secrets），部署只上传代码，
+  # 不会覆盖你已设的密钥。
+  # ---------------------------------------------------------------------------
+  deploy-functions:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy generate Edge Function
+        run: supabase functions deploy generate --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

@@ -1,6 +1,19 @@
-import { useState } from 'react';
-import { Box, Button, Divider, Stack, Typography } from '@mui/material';
+import { useState, type ChangeEvent } from 'react';
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  IconButton,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import LogoutIcon from '@mui/icons-material/Logout';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import PaidOutlinedIcon from '@mui/icons-material/PaidOutlined';
@@ -40,12 +53,12 @@ export function MePage(): JSX.Element {
   const [nicknameError, setNicknameError] = useState('');
 
   const openEditNickname = (): void => {
-    setNicknameDraft(profile?.nickname ?? '');
+    setNicknameDraft(user?.profile?.nickname ?? '');
     setNicknameError('');
     setNicknameOpen(true);
   };
 
-  const handleSaveNickname = async (): void => {
+  const handleSaveNickname = async (): Promise<void> => {
     const next = nicknameDraft.trim();
     if (!next) {
       setNicknameError('昵称不能为空');
@@ -276,7 +289,9 @@ export function MePage(): JSX.Element {
             fullWidth
             label="昵称"
             value={nicknameDraft}
-            onChange={(e) => setNicknameDraft(e.target.value.slice(0, 20))}
+            onChange={(e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+              setNicknameDraft(e.target.value.slice(0, 20))
+            }
             error={Boolean(nicknameError)}
             helperText={nicknameError || '最多 20 个字，方便别人知道这是谁的资源'}
             inputProps={{ 'aria-label': '昵称', maxLength: 20 }}
