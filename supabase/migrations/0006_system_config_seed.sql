@@ -38,7 +38,7 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 -- ---------------------------------------------------------------------------
 insert into public.system_config (key, value, description) values
   ('credit', jsonb_build_object(
-    'registerGift', 100,
+    'register_gift', 100,
     'publishReward', 2,
     'publishRewardDailyCap', 10,
     'dailyGenerationLimit', 30,

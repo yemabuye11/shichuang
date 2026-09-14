@@ -10,6 +10,9 @@ import type { CreditAccount, LedgerItem } from '@/types/models';
  */
 export function useCredits() {
   const { user, setBalance } = useAuth();
+  // 依赖稳定的用户 id 而非 user 对象（原因同 useMyApps）：user 引用每次 auth
+  // 事件都会变，直接依赖会让积分数据在 token 静默刷新时反复重拉、界面闪烁。
+  const uid = user?.profile.id ?? null;
   const [account, setAccount] = useState<CreditAccount | null>(null);
   const [ledger, setLedger] = useState<LedgerItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -24,7 +27,7 @@ export function useCredits() {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!user) {
+    if (!uid) {
       setAccount(null);
       setLedger([]);
       return;
@@ -46,7 +49,7 @@ export function useCredits() {
     } finally {
       if (mounted.current) setLoading(false);
     }
-  }, [user, setBalance]);
+  }, [uid, setBalance]);
 
   useEffect(() => {
     void refresh();

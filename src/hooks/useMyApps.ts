@@ -11,6 +11,9 @@ import { useAuth } from './useAuth';
  */
 export function useMyApps(filter: MyAppsFilter = 'all') {
   const { user } = useAuth();
+  // 依赖稳定的用户 id 而非 user 对象：user 引用每次 auth 刷新都会变，
+  // 若直接依赖 user 会导致列表在 token 静默刷新时反复重拉、界面闪烁。
+  const uid = user?.profile.id ?? null;
   const [items, setItems] = useState<App[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +27,7 @@ export function useMyApps(filter: MyAppsFilter = 'all') {
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!user) {
+    if (!uid) {
       setItems([]);
       setLoading(false);
       return;
@@ -41,7 +44,7 @@ export function useMyApps(filter: MyAppsFilter = 'all') {
     } finally {
       if (mounted.current) setLoading(false);
     }
-  }, [user, filter]);
+  }, [uid, filter]);
 
   useEffect(() => {
     void refresh();

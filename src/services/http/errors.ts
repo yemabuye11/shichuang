@@ -30,6 +30,8 @@ export function errorText(code: GenerateErrorCode | string): string {
   switch (code) {
     case 'UNAUTHORIZED':
       return '登录状态已失效，请重新登录';
+    case 'EMAIL_NOT_CONFIRMED':
+      return '这个邮箱还没有完成验证，请到邮箱点开验证邮件后再登录';
     case 'INSUFFICIENT_CREDITS':
       return '积分不足啦，可以用兑换码充值，或联系管理员';
     case 'DAILY_LIMIT':

@@ -413,8 +413,14 @@ export function onAuthStateChange(cb: (userId: string | null) => void): () => vo
   if (isMockMode()) return () => undefined;
   const sb = getSupabase();
   if (!sb) return () => undefined;
-  const { data } = sb.auth.onAuthStateChange((_event, session) => {
-    cb(session?.user?.id ?? null);
+  const { data } = sb.auth.onAuthStateChange((event, session) => {
+    // 只在「登录身份真正变化」时回调：INITIAL_SESSION / TOKEN_REFRESHED 等高频事件一律忽略。
+    // 否则每次 token 静默刷新都会触发全站重拉资料 + 列表重新加载，表现为页面不停闪烁。
+    // 注意：回调内绝不能同步调用 supabase auth 方法（refresh() 里会 getSession），
+    // 属于 supabase-js 明文警告的事件重入用法，可能造成死循环——用宏任务挪出处理栈。
+    if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT' && event !== 'USER_UPDATED') return;
+    const uid = session?.user?.id ?? null;
+    window.setTimeout(() => cb(uid), 0);
   });
   return () => data.subscription.unsubscribe();
 }

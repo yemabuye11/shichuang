@@ -37,7 +37,22 @@ export const passwordProvider: AuthProvider = {
       email: p.email.trim(),
       password: p.password,
     });
-    if (error) throw new AppError('UNAUTHORIZED', '邮箱或密码不正确，请重试', error);
+    if (error) {
+      // Supabase 的登录错误有多类（邮箱未确认 / 密码错 / 频繁尝试），
+      // 不能一律说成「密码不正确」，否则老师会反复改密码却永远登不上。
+      const raw = error.message ?? '';
+      if (error.code === 'email_not_confirmed' || raw.includes('Email not confirmed')) {
+        throw new AppError(
+          'EMAIL_NOT_CONFIRMED',
+          '这个邮箱还没有完成验证，请到邮箱点开验证邮件后再登录',
+          error,
+        );
+      }
+      if (raw.includes('Invalid login credentials')) {
+        throw new AppError('UNAUTHORIZED', '邮箱或密码不正确，请重试', error);
+      }
+      throw new AppError('UNAUTHORIZED', raw, error);
+    }
     if (!data.user) throw new AppError('UNAUTHORIZED', '登录失败，请重试');
     return { userId: data.user.id, email: data.user.email ?? p.email };
   },
