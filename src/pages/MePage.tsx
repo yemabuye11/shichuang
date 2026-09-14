@@ -12,7 +12,9 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import { TypeChip } from '@/components/common/TypeChip';
+import { useToast } from '@/components/common/ToastHost';
 import { useAuth } from '@/hooks/useAuth';
+import { updateNickname } from '@/services/libraryService';
 import { useCredits } from '@/hooks/useCredits';
 import { useMyApps } from '@/hooks/useMyApps';
 import { ROUTES } from '@/config/routes';
@@ -24,12 +26,48 @@ import { formatRelativeTime } from '@/utils/format';
  */
 export function MePage(): JSX.Element {
   const navigate = useNavigate();
-  const { user, isAdmin, signOut, setBalance } = useAuth();
-  const { account, ledger, loading, refresh } = useCredits();
+  const { user, isAdmin, signOut, setBalance, refresh } = useAuth();
+  const { account, ledger, loading, refresh: refreshCredits } = useCredits();
   const { items: apps, loading: appsLoading } = useMyApps('all');
+  const toast = useToast();
 
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [showAllLedger, setShowAllLedger] = useState(false);
+  // T09：编辑昵称
+  const [nicknameOpen, setNicknameOpen] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState('');
+  const [nicknameSaving, setNicknameSaving] = useState(false);
+  const [nicknameError, setNicknameError] = useState('');
+
+  const openEditNickname = (): void => {
+    setNicknameDraft(profile?.nickname ?? '');
+    setNicknameError('');
+    setNicknameOpen(true);
+  };
+
+  const handleSaveNickname = async (): void => {
+    const next = nicknameDraft.trim();
+    if (!next) {
+      setNicknameError('昵称不能为空');
+      return;
+    }
+    if (next.length > 20) {
+      setNicknameError('昵称最多 20 个字');
+      return;
+    }
+    setNicknameSaving(true);
+    setNicknameError('');
+    try {
+      await updateNickname(next);
+      await refresh();
+      setNicknameOpen(false);
+      toast.success('昵称已更新');
+    } catch (err: unknown) {
+      setNicknameError(err instanceof Error ? err.message : '更新昵称失败');
+    } finally {
+      setNicknameSaving(false);
+    }
+  };
 
   if (!user) {
     return <InlineLoading message="正在读取你的信息…" />;
@@ -83,6 +121,13 @@ export function MePage(): JSX.Element {
         >
           退出
         </Button>
+        <IconButton
+          aria-label="编辑昵称"
+          onClick={openEditNickname}
+          sx={{ color: 'text.secondary' }}
+        >
+          <EditOutlinedIcon />
+        </IconButton>
       </Stack>
 
       {/* ---- 额度看板 ---- */}
@@ -218,11 +263,34 @@ export function MePage(): JSX.Element {
         onClose={() => setRedeemOpen(false)}
         onSuccess={(balance) => {
           setBalance(balance);
-          void refresh();
+          void refreshCredits();
         }}
       />
+
+      {/* ---- T09：编辑昵称 ---- */}
+      <Dialog open={nicknameOpen} onClose={() => setNicknameOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>编辑昵称</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="昵称"
+            value={nicknameDraft}
+            onChange={(e) => setNicknameDraft(e.target.value.slice(0, 20))}
+            error={Boolean(nicknameError)}
+            helperText={nicknameError || '最多 20 个字，方便别人知道这是谁的资源'}
+            inputProps={{ 'aria-label': '昵称', maxLength: 20 }}
+            sx={{ mt: 1, '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNicknameOpen(false)}>取消</Button>
+          <Button onClick={() => void handleSaveNickname()} disabled={nicknameSaving} variant="contained">
+            {nicknameSaving ? '保存中…' : '保存'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
-}
 
 export default MePage;

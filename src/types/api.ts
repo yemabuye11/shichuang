@@ -22,6 +22,16 @@ export interface GenerateRequest {
   category?: Category;
   /** T06：文档类型（仅 category='doc' 时有效）。 */
   docType?: DocType;
+  /** 多格式勾选：文档类可一次生成多种格式，积分分开计算（后端逐个预扣/结算）。 */
+  docTypes?: DocType[];
+  /** T09：生成后是否发布到内容库（公开后他人可下载，原作者得一半积分）。默认 false，需作者显式同意。 */
+  publishToLibrary?: boolean;
+  /** 上传的参考模板正文（教师上传的 .txt/.md 等文本模板，截断后注入提示词；非文本文件仅传文件名提示）。 */
+  templateContent?: string;
+  /** 参考公开课标题（从首页公开课资源勾选，注入提示词让内容更厚实）。 */
+  referenceTitle?: string;
+  /** 参考公开课来源（如 B站/国家中小学智慧教育平台）。 */
+  referenceSource?: string;
   /** T06：教材版本 id（T07 回填用）。 */
   textbookVersionId?: string | null;
   /** T07：教材检索上下文（文本，由后端注入；前端可透传为空）。 */

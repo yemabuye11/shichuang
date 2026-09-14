@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { Box, Container, Drawer, List, ListItemButton, ListItemIcon, ListItemText, Stack } from '@mui/material';
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import LibraryBooksOutlinedIcon from '@mui/icons-material/LibraryBooksOutlined';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { TopNav } from './TopNav';
 import { MobileTabBar } from './MobileTabBar';
@@ -28,8 +30,15 @@ export function AppShell({ children }: { children?: ReactNode }): JSX.Element {
     { label: '首页', to: ROUTES.HOME, icon: <HomeOutlinedIcon /> },
     { label: '生成应用', to: ROUTES.GENERATE, icon: <AutoAwesomeOutlinedIcon /> },
     { label: '应用广场', to: ROUTES.SQUARE, icon: <AppsOutlinedIcon /> },
+    { label: '内容库', to: ROUTES.LIBRARY, icon: <LibraryBooksOutlinedIcon /> },
     { label: '我的', to: ROUTES.ME, icon: <PersonOutlineIcon /> },
-    ...(isAdmin ? [{ label: '管理员后台', to: ROUTES.ADMIN, icon: <AdminPanelSettingsIcon /> }] : []),
+    { label: '上传优秀案例', to: ROUTES.RESOURCE_UPLOAD, icon: <UploadFileIcon /> },
+    ...(isAdmin
+      ? [
+          { label: '管理员后台', to: ROUTES.ADMIN, icon: <AdminPanelSettingsIcon /> },
+          { label: '审核资源', to: ROUTES.ADMIN_RESOURCES, icon: <AdminPanelSettingsIcon /> },
+        ]
+      : []),
   ];
 
   return (

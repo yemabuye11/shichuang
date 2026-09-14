@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Box, Button, Divider, Stack, Typography } from '@mui/material';
+import { Box, Button, Divider, FormControlLabel, Stack, Switch, Typography } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import HomeIcon from '@mui/icons-material/Home';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
@@ -15,6 +15,11 @@ import { useToast } from '@/components/common/ToastHost';
 import { docEditPath, docRunPath, ROUTES } from '@/config/routes';
 import { getDocTypeLabel } from '@/config/constants';
 import * as docService from '@/services/docService';
+import {
+  getDocLibraryEntry,
+  setDocPublic,
+} from '@/services/libraryService';
+import { useAuth } from '@/hooks/useAuth';
 import type { DocModel } from '@/types/doc';
 
 /**
@@ -32,6 +37,7 @@ export function DocRunPage(): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
+  const { user } = useAuth();
   const [model, setModel] = useState<DocModel | null>(null);
   const [status, setStatus] = useState<Status>('loading');
   /** 保存新版本后覆盖显示的版本号（本地优先，未保存时回退到模型自带版本）。 */
@@ -55,6 +61,51 @@ export function DocRunPage(): JSX.Element {
       alive = false;
     };
   }, [id]);
+
+  // ---- T09：内容库发布状态（仅作者可见）----
+  const [libIsPublic, setLibIsPublic] = useState(false);
+  const [libDownloadCount, setLibDownloadCount] = useState(0);
+  const [libLoading, setLibLoading] = useState(false);
+  const [libToggling, setLibToggling] = useState(false);
+  useEffect(() => {
+    if (!id || !canEdit) return;
+    let alive = true;
+    setLibLoading(true);
+    void getDocLibraryEntry(id)
+      .then((entry) => {
+        if (!alive) return;
+        setLibIsPublic(entry?.isPublic ?? false);
+        setLibDownloadCount(entry?.downloadCount ?? 0);
+      })
+      .catch(() => {
+        if (alive) {
+          setLibIsPublic(false);
+          setLibDownloadCount(0);
+        }
+      })
+      .finally(() => {
+        if (alive) setLibLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [id, canEdit]);
+
+  /** 切换内容库公开状态。 */
+  const handleToggleLibrary = useCallback(async () => {
+    if (!id || libToggling) return;
+    const next = !libIsPublic;
+    setLibToggling(true);
+    try {
+      await setDocPublic(id, next, model?.meta?.title, user?.profile?.nickname);
+      setLibIsPublic(next);
+      toast.success(next ? '已发布到内容库，别人现在能下载了' : '已撤下内容库');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : '操作失败，请重试');
+    } finally {
+      setLibToggling(false);
+    }
+  }, [id, libIsPublic, libToggling, model?.meta?.title, user?.profile?.nickname, toast]);
 
   useEffect(() => {
     if (!id) {
@@ -219,6 +270,48 @@ export function DocRunPage(): JSX.Element {
           <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>教材：{meta.textbook}</Typography>
         ) : null}
       </Stack>
+
+      {/* ---- T09：内容库发布开关（仅作者可见） ---- */}
+      {canEdit ? (
+        <Box
+          sx={{
+            mt: 2,
+            borderRadius: 2.5,
+            px: 2,
+            py: 1.25,
+            bgcolor: 'rgba(47,107,255,0.05)',
+            border: '1px solid',
+            borderColor: 'rgba(47,107,255,0.14)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={libIsPublic}
+                  onChange={() => void handleToggleLibrary()}
+                  disabled={libToggling || libLoading}
+                  size="small"
+                />
+              }
+              label="发布到内容库"
+              sx={{ m: 0, '& .MuiFormControlLabel-label': { fontSize: 14.5, fontWeight: 600 } }}
+            />
+            <Typography sx={{ fontSize: 13, color: 'text.secondary', mt: 0.25 }}>
+              {libLoading
+                ? '正在读取发布状态…'
+                : libIsPublic
+                  ? `已公开 · 已被下载 ${libDownloadCount} 次`
+                  : '未公开 · 公开后别人可下载，你可得一半积分'}
+            </Typography>
+          </Box>
+        </Box>
+      ) : null}
 
       {/* 待核对项已由顶部 VerifyBanner 统一展示 */}
 

@@ -70,6 +70,12 @@ export interface ComposeDocInput {
   difficulty?: string;
   /** T07 教材检索回填的上下文（可能为空，空则不注入）。 */
   textbookContext?: string;
+  /** 上传的参考模板正文（教师上传文本模板，截断后注入 user 消息，沿用其章节结构与排版风格）。 */
+  templateContent?: string;
+  /** 参考公开课标题（注入提示词让内容更厚实）。 */
+  referenceTitle?: string;
+  /** 参考公开课来源。 */
+  referenceSource?: string;
 }
 
 export interface Composed {
@@ -209,6 +215,23 @@ export async function composeDoc(input: ComposeDocInput): Promise<Composed> {
       input.textbookContext.trim() +
       '\n\n注意：凡涉及教材具体事实、数据、例题、年份或政策的内容，若无法从上方教材上下文确认，' +
       '请在输出 DocModel 的 verifyHints 中逐条列出「待教师核对」的要点，方便教师核对。';
+  }
+
+  // 参考模板结构：仅注入 user 消息，system 段必须逐字节稳定以保证 DeepSeek 缓存命中。
+  if (input.templateContent && input.templateContent.trim().length > 0) {
+    userPrompt +=
+      '\n\n---\n\n# 参考模板结构（请尽量沿用其章节结构与排版风格，但内容须针对本次需求重新撰写，不要照抄）\n' +
+      input.templateContent.slice(0, 6000);
+  }
+
+  // 参考公开课：让内容更厚实（有具体例题、课堂活动与板书/互动设计，达到优质课标准）。
+  // 注意：动态内容一律进 user 消息，绝不污染 systemPrompt。
+  if (input.referenceTitle && input.referenceTitle.trim().length > 0) {
+    userPrompt +=
+      '\n\n---\n\n# 参考公开课（让内容更厚实：有具体例题、有课堂活动与板书/互动设计，达到优质课标准）\n' +
+      '参考课例：《' + input.referenceTitle + '》' +
+      (input.referenceSource && input.referenceSource.trim().length > 0 ? '（来源：' + input.referenceSource + '）' : '') +
+      '\n请参照优质公开课的标准，使本节内容详实、有案例，避免空洞。';
   }
 
   return {

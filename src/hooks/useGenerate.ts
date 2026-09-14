@@ -49,6 +49,8 @@ export interface GenerateSnapshot {
   readonly code: string;
   readonly chars: number;
   readonly result: DoneEvent | null;
+  /** 多格式生成时累积的每一份结果（单格式时长度为 1）。 */
+  readonly results: DoneEvent[];
   readonly error: ErrorEvent | null;
   readonly errorText: string;
   readonly startedAt: number;
@@ -68,6 +70,7 @@ function initialSnapshot(req?: GenerateRequest): GenerateSnapshot {
     code: '',
     chars: 0,
     result: null,
+    results: [],
     error: null,
     errorText: '',
     startedAt: 0,
@@ -176,7 +179,16 @@ function handleEvent(event: GenEvent): void {
       break;
     case 'done': {
       const result = event.data;
-      patch({ status: 'storing', result });
+      const nextResults = snapshot.results.some((r) => r.appId === result.appId)
+        ? snapshot.results
+        : [...snapshot.results, result];
+      // 多格式生成时一个请求会收到多个 done；第一个之后的 done 不能把已完成的
+      // 状态又打回 storing（避免 UI 闪烁回「生成中」）。
+      patch({
+        status: snapshot.status === 'done' ? 'done' : 'storing',
+        results: nextResults,
+        result: nextResults[0] ?? null,
+      });
       void (async () => {
         try {
           await artifactService.saveLocal(result.appId, result.html, '', 1);

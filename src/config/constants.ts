@@ -289,7 +289,7 @@ export const TEXTBOOKS: readonly string[] = [
 ];
 
 /** 课堂时长选项。 */
-export const DURATIONS: readonly string[] = ['5分钟', '10分钟', '20分钟', '一节课', '不限'];
+export const DURATIONS: readonly string[] = ['5分钟', '10分钟', '20分钟', '40分钟', '45分钟', '一节课', '不限'];
 
 /** 难度选项。 */
 export const DIFFICULTY: readonly string[] = ['简单', '中等', '较难', '挑战'];

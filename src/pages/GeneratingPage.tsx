@@ -15,7 +15,7 @@ import { useToast } from '@/components/common/ToastHost';
 import { useAuth } from '@/hooks/useAuth';
 import { useGenerate, useGenerateRun } from '@/hooks/useGenerate';
 import { appRunPath, docRunPath, ROUTES } from '@/config/routes';
-import { getAppTypeLabel } from '@/config/constants';
+import { getAppTypeLabel, getDocTypeLabel } from '@/config/constants';
 import * as artifactService from '@/services/artifactService';
 import * as appService from '@/services/appService';
 import * as trackService from '@/services/trackService';
@@ -166,7 +166,107 @@ export function GeneratingPage(): JSX.Element {
         {busy ? <GenerationProgress snapshot={snapshot} onCancel={cancel} /> : null}
 
         {snapshot.status === 'done' && result ? (
-          <Stack spacing={2.5}>
+          snapshot.results.length > 1 ? (
+            <Stack spacing={2.5}>
+              {/* 多格式产物：同一请求生成了多份文档 */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 1.25,
+                  alignItems: 'center',
+                  borderRadius: 2.5,
+                  bgcolor: 'rgba(18,161,80,0.07)',
+                  px: 2,
+                  py: 1.5,
+                }}
+              >
+                <CheckCircleIcon color="success" aria-hidden="true" />
+                <Typography sx={{ fontSize: 15.5, fontWeight: 700, color: 'success.main' }}>
+                  生成了 {snapshot.results.length} 份文档 🎉
+                </Typography>
+              </Box>
+
+              {/* 总消耗 */}
+              <Box
+                sx={{
+                  borderRadius: 2.5,
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  bgcolor: '#fff',
+                  px: 2,
+                  py: 1.5,
+                }}
+              >
+                <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap', gap: 1.5 }}>
+                  <Box>
+                    <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>本次消耗</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'primary.main' }}>
+                      {snapshot.results.reduce((a, r) => a + (r.creditsCost || 0), 0)} 积分
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>剩余积分</Typography>
+                    <Typography sx={{ fontSize: 20, fontWeight: 800 }}>
+                      {snapshot.results[0].creditsBalance}
+                    </Typography>
+                  </Box>
+                </Stack>
+              </Box>
+
+              {/* 每份文档一张卡片 */}
+              <Stack spacing={1.5}>
+                {snapshot.results.map((r) => (
+                  <Box
+                    key={r.appId}
+                    sx={{
+                      borderRadius: 2.5,
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: '#fff',
+                      p: 2,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 1.5,
+                    }}
+                  >
+                    <Typography sx={{ fontSize: 15, fontWeight: 600 }}>
+                      {r.docType ? getDocTypeLabel(r.docType) : r.title}
+                    </Typography>
+                    <Button
+                      variant="contained"
+                      size="medium"
+                      startIcon={<OpenInNewIcon />}
+                      onClick={() => navigate(docRunPath(r.appId))}
+                      sx={{ minHeight: 42, px: 2.5, flexShrink: 0 }}
+                    >
+                      查看文档
+                    </Button>
+                  </Box>
+                ))}
+              </Stack>
+
+              {/* 再做一个 */}
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
+                <Button
+                  variant="text"
+                  size="large"
+                  startIcon={<AutoAwesomeIcon />}
+                  onClick={() => {
+                    reset();
+                    navigate(ROUTES.GENERATE);
+                  }}
+                  sx={{ flex: 1, minHeight: 50 }}
+                >
+                  再做一个
+                </Button>
+              </Stack>
+
+              <Divider />
+              <AiDisclaimer />
+            </Stack>
+          ) : (
+            <Stack spacing={2.5}>
             {/* 完成提示 */}
             <Box
               sx={{
@@ -382,6 +482,7 @@ export function GeneratingPage(): JSX.Element {
             <Divider />
             <AiDisclaimer />
           </Stack>
+          )
         ) : null}
 
         {(snapshot.status === 'error' || snapshot.status === 'cancelled') && snapshot.error ? (

@@ -258,6 +258,7 @@ export function PasswordForm({
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
                 placeholder={email.split('@')[0] || '同学们怎么称呼你'}
+                helperText="填个昵称，方便别人知道这是谁的资源（选填）"
                 inputProps={{ 'aria-label': '昵称', maxLength: 20 }}
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
               />

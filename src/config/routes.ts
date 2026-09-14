@@ -32,6 +32,12 @@ export const ROUTES = {
   RECHARGE: '/recharge',
   /** 文档运行页（公开，对应 apps.category='doc' 的网页链接）。 */
   DOC_RUN: '/d',
+  /** 内容市场：公开内容库（需登录，T09）。 */
+  LIBRARY: '/library',
+  /** 校本资源库：教师上传优秀教学案例（需登录）。 */
+  RESOURCE_UPLOAD: '/resources/upload',
+  /** 校本资源库：管理员审核台（需登录 + 管理员）。 */
+  ADMIN_RESOURCES: '/admin/resources',
 } as const;
 
 /**

@@ -30,6 +30,9 @@ const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
 const RechargePage = lazy(() => import('@/pages/RechargePage'));
+const TeacherResourceUploadPage = lazy(() => import('@/pages/TeacherResourceUploadPage'));
+const AdminResourceReviewPage = lazy(() => import('@/pages/AdminResourceReviewPage'));
+const ContentLibraryPage = lazy(() => import('@/pages/ContentLibraryPage'));
 
 /** 懒加载包裹器。 */
 function withSuspense(node: JSX.Element): JSX.Element {
@@ -86,6 +89,24 @@ const routes = [
         path: 'admin',
         element: (
           <RequireAuth requireAdmin>{withSuspense(<AdminPage />)}</RequireAuth>
+        ),
+      },
+      {
+        path: 'resources/upload',
+        element: (
+          <RequireAuth>{withSuspense(<TeacherResourceUploadPage />)}</RequireAuth>
+        ),
+      },
+      {
+        path: 'admin/resources',
+        element: (
+          <RequireAuth requireAdmin>{withSuspense(<AdminResourceReviewPage />)}</RequireAuth>
+        ),
+      },
+      {
+        path: 'library',
+        element: (
+          <RequireAuth>{withSuspense(<ContentLibraryPage />)}</RequireAuth>
         ),
       },
       { path: '404', element: <NotFoundPage /> },
