@@ -89,13 +89,10 @@ export class AliyunEmailAdapter implements EmailAdapter {
     // StringToSign = "GET&%2F&" + encodeURIComponent(canonicalizedQueryString)
     const stringToSign = `GET&%2F&${percentEncode(canonical)}`;
 
-    // 签名 = HMAC-SHA1(AccessKeySecret + '&', StringToSign) → 十六进制
-    // ⚠️ 注意：这里输出的是**十六进制**（小写 hex）。阿里云官方部分样例/SDK 用的是
-    //    **Base64**（HMAC-SHA1 之后再 base64）。若真实发信时报签名错误
-    //    （如 SignatureDoesNotMatch / InvalidSignature），只需改这一处：
-    //    把 sha1HexHmac 换成「HMAC-SHA1 → Base64」即可，其余流程不用动。
-    //    当前环境无 AK/SK，无法实测，故保留改造前的原有行为（十六进制），不要擅自改动。
-    const signature = await sha1HexHmac(stringToSign, `${akSecret}&`);
+    // 签名 = Base64( HMAC-SHA1( AccessKeySecret + '&', StringToSign ) )
+    // 阿里云 RPC 签名规范明确要求 Base64 编码（不是十六进制）。
+    // 此前代码误用十六进制，真实发信会报 SignatureDoesNotMatch，现已修正为 Base64。
+    const signature = await sha1Base64Hmac(stringToSign, `${akSecret}&`);
 
     // 最终请求 URL（Signature 本身也要百分号编码）
     const url =
@@ -154,12 +151,12 @@ function iso8601GMT(d: Date): string {
 }
 
 /**
- * HMAC-SHA1 十六进制签名。
+ * HMAC-SHA1 → Base64 签名（阿里云 RPC 规范要求的编码方式）。
  *
  * @param message 待签名内容。
  * @param key     签名密钥。
  */
-async function sha1HexHmac(message: string, key: string): Promise<string> {
+async function sha1Base64Hmac(message: string, key: string): Promise<string> {
   const keyBytes = new TextEncoder().encode(key);
   const msgBytes = new TextEncoder().encode(message);
   const cryptoKey = await crypto.subtle.importKey(
@@ -170,9 +167,10 @@ async function sha1HexHmac(message: string, key: string): Promise<string> {
     ['sign'],
   );
   const sig = await crypto.subtle.sign('HMAC', cryptoKey, msgBytes);
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  const bytes = new Uint8Array(sig);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
 }
 
 export const aliyunAdapter = new AliyunEmailAdapter();
