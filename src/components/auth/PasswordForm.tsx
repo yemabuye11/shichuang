@@ -29,6 +29,7 @@ export function PasswordForm({
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [nickname, setNickname] = useState('');
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -61,6 +62,7 @@ export function PasswordForm({
       setEmailSent(false);
       setCode('');
       setDevCode('');
+      setConfirmPassword('');
       setCooldownSec(0);
       setResetTip(null);
     }
@@ -146,6 +148,10 @@ export function PasswordForm({
       setError('密码至少 8 位，方便的话用「学科+手机号后 6 位」');
       return;
     }
+    if (password !== confirmPassword) {
+      setError('两次输入的密码不一致');
+      return;
+    }
     try {
       await authService.signUp('password', {
         email: email.trim(),
@@ -156,6 +162,7 @@ export function PasswordForm({
       setEmail('');
       setCode('');
       setPassword('');
+      setConfirmPassword('');
       setNickname('');
       setEmailSent(false);
       setStep('email');
@@ -276,6 +283,9 @@ export function PasswordForm({
             </>
           ) : (
             <>
+              <Box sx={{ fontSize: 14, color: 'text.secondary', mb: -0.5 }}>
+                验证码已通过，设置一个登录密码：
+              </Box>
               <TextField
                 label="昵称（选填）"
                 value={nickname}
@@ -291,6 +301,15 @@ export function PasswordForm({
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="至少 8 位"
                 inputProps={{ 'aria-label': '密码', autoComplete: 'new-password' }}
+                sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
+              />
+              <TextField
+                label="确认密码"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="再输入一次密码"
+                inputProps={{ 'aria-label': '确认密码', autoComplete: 'new-password' }}
                 sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }}
               />
               <Button
