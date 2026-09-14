@@ -32,18 +32,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 项目页（<user>.github.io/<repo>/）需要 base 路径；
-      # 用户/组织页（<user>.github.io）base 为 /。自动判断，无需手填。
+      # 自定义域名 myshichuang.xyz 已接入：站点跑在域名根路径，base 固定为 /。
+      # （项目页默认的 /shichuang/ 子路径仅在 *.github.io 默认地址下需要；切自定义域名后
+      #   GitHub Pages 在域名根提供站点，base 必须为 /，否则资源 404。）
       - name: Compute base path
         id: base
         shell: bash
-        run: |
-          REPO="${GITHUB_REPOSITORY##*/}"
-          if [[ "$REPO" == *.github.io ]]; then
-            echo "path=/" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=/$REPO/" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "path=/" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: npm run build -- --base "${{ steps.base.outputs.path }}"
