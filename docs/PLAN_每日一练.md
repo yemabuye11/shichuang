@@ -137,7 +137,16 @@
 
 ---
 
-## 六、数据模型（迁移 `0038_practice_daily.sql`，幂等可重跑）
+## 六、数据模型（迁移 `0038_practice_daily.sql` + `0038a_enum_daily_practice.sql`，均幂等可重跑）
+
+> ⚠️ **迁移运行顺序（在 Supabase SQL Editor 手动执行）**：
+> 1. **先跑 `0038a_enum_daily_practice.sql`** —— 单独向 `app_type_enum` 提交枚举值 `daily_practice`；
+> 2. **再跑 `0038_practice_daily.sql`** —— 写入 `app_type_profiles` 定价行 + 建三张表 + RLS + 4 个 RPC；
+> 3. **最后跑 `0039_credit_decimal.sql`** —— 把积分字段改 `numeric`（支持小数积分）。
+>
+> 原因：PostgreSQL 禁止在同一事务内「新增枚举值」后立刻「使用该枚举值」，否则报
+> `55P04: unsafe use of new value`。SQL Editor 把整段当单事务，故枚举加值必须拆成独立文件先提交。
+> 三个文件都带幂等保护，可反复粘贴运行不报错。
 
 ```sql
 practices           -- 练习集
