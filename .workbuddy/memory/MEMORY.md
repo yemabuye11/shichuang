@@ -2,6 +2,8 @@
 
 ## 客户与协作方式
 - 客户野马：学校教务/教学工作，本人任教九年级，**非程序员**
+## 协作偏好（野马明确要求）
+- **生成/修改本地文件后必须 `present_files` 展示出来**（他要右键定位文件夹或在右侧直接打开）。历史上有次生成 `0033_email_verification_id.sql` 没展示，他找不到文件。**以后凡产出文件一律展示。**
 - 讲方案用业务语言，不甩术语；提方案必须说清代价（要花多少钱、要不要学新东西、要维护什么）
 - 核心诉求：**省事 + 能推广**；为保老师用得起来，宁可牺牲一点安全性
 - 成本极度敏感，**不能额外花钱**（倾向免费额度起步）
@@ -74,6 +76,15 @@
 - git 仓库已初始化（此前无 .git），首 commit `93d798e`（T06-A）
 - .gitignore 已排除 `/_*`（根目录临时脚本）、`.pkg-repair/`、`.rollup-repair/`（历史离线 tgz）
 - T06（A+B）已完成：文档生成主链路 mock 下端到端可用（93d798e + 2e49ad6）；主页已改版并前置互动/社区板块（a60dc33, cf99b5e）。T07（教材版本机制）已完成（迁移0013/14/15 + Edge搜索适配器 + VerifyBanner + TextbookCascade 接线，4394d2b/fa8b53e，typecheck+build 通过）；T08（导出+在线编辑）已完成（exportService 结构映射导出 PPTX/Word + TipTap 在线编辑 + DocEditorPage + 编辑入口，f21b164…e70faec，typecheck+build 通过）
+
+## 认证与邮件基础设施（截至 2026-09-14）
+- **邮箱验证码注册链路打通**：`request-email-code` + `verify-email-code` 两个 Edge Function，验证码存 `email_verifications`（哈希+过期+限流：单邮箱1h≤5），发信走阿里云 DirectMail。
+- **阿里云邮件推送已实通**：发信域名 `myshichuang.xyz`（DNS TXT/SPF/DKIM/DMARC+MX 已验证，NS 已切 hichina）；RAM 子用户需 `AliyunDirectMailFullAccess`（Readonly 不能发信）；签名须 **Base64**（非 hex）；发信地址 `noreply@myshichuang.xyz`。密钥经 `supabase secrets set EMAIL_PROVIDER=aliyun ...` 注入，真发信实测 200 `sent:true`。
+- **注册「确认密码」**：`PasswordForm` 注册步加确认密码（两次一致才通过），commit `08c3354`。
+- **PWA 静默刷新 bug 已修**：`VitePWA registerType` 由 `autoUpdate`→`prompt`（commit `8d56f79`），避免检测到新构建即 `location.reload()` 把填表用户踢回登录、表单数据全丢。
+- **忘记密码改为邮箱验证码式**（替代 Supabase 邮件链接）：新增 `reset-password` Edge Function（服务端独立校验码→`auth.admin.updateUserById` 改密→标记 consumed）+ `ForgotPasswordPage`（`/forgot`，邮箱→发码→填码+新密码+确认密码→改密）+ `authService.resetPasswordWithCode`，commit `d9e5f3e`。旧 `/reset` 邮件链接式保留作兜底未删。
+- **无密码残留账号结论**：之前野马"注册过一次没输密码"是 PWA 刷新打断、signUp 未执行，**不会留下半个无密码账号**，无需补救。
+- ⚠️ 待野马确认：Supabase Redirect URL 须为完整 `/reset`（非曾写的 `/rese`）。
 
 ## T06 交付约定（给 T06-B 前端）
 - 产物路径：文档 `/d/{yyyy}/{mm}/{id}/v{n}.html`，doc_json `/d/{yyyy}/{mm}/{id}/v{n}.json`；应用仍是 `/a/...`
