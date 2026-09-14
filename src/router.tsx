@@ -27,6 +27,7 @@ const MePage = lazy(() => import('@/pages/MePage'));
 const MyAppsPage = lazy(() => import('@/pages/MyAppsPage'));
 const LoginPage = lazy(() => import('@/pages/LoginPage'));
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
+const ForgotPasswordPage = lazy(() => import('@/pages/ForgotPasswordPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
 const RechargePage = lazy(() => import('@/pages/RechargePage'));
 
@@ -69,6 +70,9 @@ const routes = [
         element: <RequireAuth>{withSuspense(<MyAppsPage />)}</RequireAuth>,
       },
       { path: 'login', element: withSuspense(<LoginPage />) },
+      // 公开：找回密码（邮箱验证码式，P0 主用）。同样处于未登录态，
+      // 绝不能包 RequireAuth，否则会被踢回登录页、永远改不了密码。
+      { path: 'forgot', element: withSuspense(<ForgotPasswordPage />) },
       // 公开：忘记密码的重置页。此时用户处于「未登录的恢复态」，
       // 绝不能包 RequireAuth，否则会被踢回登录页、永远改不了密码。
       { path: 'reset', element: withSuspense(<ResetPasswordPage />) },

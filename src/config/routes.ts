@@ -22,8 +22,10 @@ export const ROUTES = {
   MY_APPS: '/me/apps',
   /** 登录页（公开，支持 `?redirect=`）。 */
   LOGIN: '/login',
-  /** 重置密码页（公开，忘记密码邮件的回跳地址）。 */
+  /** 重置密码页（公开，旧式邮件链接回跳地址，保留作兜底）。 */
   RESET: '/reset',
+  /** 找回密码页（公开，邮箱验证码式，P0 主用流程）。 */
+  FORGOT: '/forgot',
   /** 管理员后台（需登录 + role='admin'）。 */
   ADMIN: '/admin',
   /** 自助充值页（需登录，个人收款码 + 后台确认到账）。 */

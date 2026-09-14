@@ -256,6 +256,34 @@ function clearRecoveryParamsFromUrl(): void {
 }
 
 /**
+ * 用邮箱验证码重置密码（代码式，替代 Supabase 的邮件链接式）。
+ *
+ * 直接调 `reset-password` Edge Function：服务端独立校验验证码（不信任前端
+ * 已验证状态），校验通过后用 service_role 改密并消费验证码。全流程不离开本页，
+ * 教师不用来回切邮件、不点链接。
+ *
+ * 安全由「邮箱持有」保证，与注册验证码同源（同一张 `email_verifications` 表、
+ * 同一套限流、同一套 `SECRET_SALT` 哈希）。
+ *
+ * @param email 注册邮箱。
+ * @param code 6 位邮箱验证码。
+ * @param newPassword 新密码（≥8 位，服务端也会再卡一道）。
+ */
+export async function resetPasswordWithCode(
+  email: string,
+  code: string,
+  newPassword: string,
+): Promise<void> {
+  if (isMockMode()) throw new AppError('NETWORK', '演示模式不支持找回密码，请配置云端服务后再试');
+  const sb = getSupabase();
+  if (!sb) throw new AppError('NETWORK', '还没有连接云端服务');
+  const { error } = await sb.functions.invoke('reset-password', {
+    body: { email: email.trim().toLowerCase(), code, newPassword },
+  });
+  if (error) throw new AppError('UNKNOWN', await edgeErrorMessage(error, '密码重置失败，请稍后重试'), error);
+}
+
+/**
  * 在恢复会话下设置新密码。
  *
  * 只能在上一步 {@link restoreRecoverySession} 返回 `true` 后调用，
@@ -419,6 +447,7 @@ export const authService = {
   signUp,
   requestEmailCode,
   verifyEmailCode,
+  resetPasswordWithCode,
   requestPasswordReset,
   restoreRecoverySession,
   updatePassword,

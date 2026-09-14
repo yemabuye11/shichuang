@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Stack, TextField } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
 import * as authService from '@/services/authService';
+import { ROUTES } from '@/config/routes';
 
 /**
  * 邮箱 + 密码登录 / 注册表单（P0 默认登录方式）。
@@ -37,14 +39,10 @@ export function PasswordForm({
   const [cooldownSec, setCooldownSec] = useState(0);
   const [error, setError] = useState('');
   const [devCode, setDevCode] = useState('');
-  /** 忘记密码邮件的发送结果提示（`success` / `error`）。 */
-  const [resetTip, setResetTip] = useState<{ severity: 'success' | 'error'; text: string } | null>(
-    null,
-  );
-  const [resetting, setResetting] = useState(false);
 
   const isSubmitting = sending || verifying;
   const cooldownRef = useRef<number | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     return () => {
@@ -64,7 +62,6 @@ export function PasswordForm({
       setDevCode('');
       setConfirmPassword('');
       setCooldownSec(0);
-      setResetTip(null);
     }
   }, [isSignUp]);
 
@@ -169,36 +166,6 @@ export function PasswordForm({
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : '注册失败，请重试');
-    }
-  };
-
-  /**
-   * 发送「重置密码」邮件。
-   *
-   * 注意：本按钮必须是 `type="button"`——表单的 submit 事件统一由
-   * `handleSubmit()` 派发到登录/注册，用 submit 会误触发登录。
-   */
-  const sendResetLink = async (): Promise<void> => {
-    setError('');
-    setResetTip(null);
-    if (!email.trim()) {
-      setResetTip({ severity: 'error', text: '请先填写邮箱' });
-      return;
-    }
-    setResetting(true);
-    try {
-      await authService.requestPasswordReset(email);
-      setResetTip({
-        severity: 'success',
-        text: '重置链接已发送到你的邮箱，请查收（含垃圾箱）；链接 1 小时内有效',
-      });
-    } catch (err) {
-      setResetTip({
-        severity: 'error',
-        text: err instanceof Error ? err.message : '发送失败，请稍后重试',
-      });
-    } finally {
-      setResetting(false);
     }
   };
 
@@ -349,15 +316,12 @@ export function PasswordForm({
               type="button"
               variant="text"
               size="small"
-              disabled={resetting}
-              onClick={() => void sendResetLink()}
+              onClick={() => navigate(ROUTES.FORGOT)}
               sx={{ minHeight: 36, color: 'text.secondary', fontSize: 13.5, textTransform: 'none' }}
             >
-              {resetting ? '发送中…' : '忘记密码？'}
+              忘记密码？
             </Button>
           </Box>
-
-          {resetTip ? <Alert severity={resetTip.severity}>{resetTip.text}</Alert> : null}
 
           <Button
             type="submit"
