@@ -23,7 +23,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { SSE_HEADERS, jsonError } from '../_shared/json.ts';
 import { AppError, toAppError } from '../_shared/errors.ts';
 import { requireUser, type Caller } from '../_shared/auth.ts';
-import { adminClient } from '../_shared/supabaseAdmin.ts';
+import { adminClient, userClient } from '../_shared/supabaseAdmin.ts';
 import { loadAppType, loadConfig, loadModel } from '../_shared/config.ts';
 import { compose, composeDoc, composeRepair } from '../_shared/prompt/compose.ts';
 import { chooseAdapter, isMock } from '../_shared/llm/index.ts';
@@ -198,10 +198,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       try {
         heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS);
         const sb = adminClient();
+        // 依赖 auth.uid() 的额度/并发 RPC 必须使用调用方 JWT；service_role
+        // 客户端只适合可信写入，否则数据库会把调用者识别成匿名用户。
+        const userSb = userClient(caller.token);
 
         // ---- 1. 生成前检查（日限 / 并发 / 月度阀）----
         await assertUnderMonthlyCap();
-        const allowed = await sb.rpc('check_generation_allowed');
+        const allowed = await userSb.rpc('check_generation_allowed');
         const allowedRaw = (allowed.data ?? {}) as { allowed?: boolean; code?: string; message?: string };
         if (allowedRaw.allowed === false) {
           throw new AppError(
@@ -235,7 +238,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           const jobId = crypto.randomUUID();
           const idem = body.idempotencyKey ?? jobId;
 
-          const reserve = await sb.rpc('reserve_credits', {
+          const reserve = await userSb.rpc('reserve_credits', {
             p_amount: totalCost,
             p_job_id: jobId,
             p_app_type: formats[0],
@@ -652,7 +655,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const appId = crypto.randomUUID();
         const idem = body.idempotencyKey ?? jobId;
 
-        const reserve = await sb.rpc('reserve_credits', {
+        const reserve = await userSb.rpc('reserve_credits', {
           p_amount: creditCost,
           p_job_id: jobId,
           p_app_type: appType,
