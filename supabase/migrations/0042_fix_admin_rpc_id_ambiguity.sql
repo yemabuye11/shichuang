@@ -363,10 +363,14 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- 7. 授权（create or replace 保留 ACL；admin_list_users 走过 drop，必须补授一次）
+--    授权范围沿用各函数的**原始**迁移：
+--      * 0009 / 0010 的 admin_* 系列 → anon, authenticated, service_role
+--      * 0022 的 approve / list_recharge → authenticated, service_role（不开放 anon）
 -- ---------------------------------------------------------------------------
 grant execute on function public.admin_list_users(text, integer, integer) to anon, authenticated, service_role;
-grant execute on function public.admin_list_recharge(text, integer) to anon, authenticated, service_role;
-grant execute on function public.admin_approve_recharge(uuid, boolean) to anon, authenticated, service_role;
-grant execute on function public.admin_adjust_credits(uuid, integer, text) to anon, authenticated, service_role;
 grant execute on function public.admin_list_reports(text, integer, integer) to anon, authenticated, service_role;
 grant execute on function public.admin_list_codes(text, text, text, integer, integer) to anon, authenticated, service_role;
+grant execute on function public.admin_adjust_credits(uuid, integer, text) to anon, authenticated, service_role;
+
+grant execute on function public.admin_list_recharge(text, integer) to authenticated, service_role;
+grant execute on function public.admin_approve_recharge(uuid, boolean) to authenticated, service_role;
