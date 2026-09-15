@@ -4,6 +4,7 @@ import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { ROUTES } from '@/config/routes';
@@ -28,9 +29,15 @@ export function MobileTabBar(): JSX.Element {
   const path = location.pathname;
   // 登录后「生成」tab 已隐藏，此时 /generate 与 / 都归到「制作」tab 高亮，
   // 避免出现「没有任何 tab 被选中」的空档。
+  // 「练习」tab 的 value 必须是真实绝对路径（ROUTES.PRACTICE_MANAGE = '/practice'）：
+  // onChange 里执行的是 navigate(next)，若给相对值 'practice'，从 /square 等子路径点进去
+  // 会被解析成 /square/practice 而到不了每日一练。
   const value =
-    path.startsWith('/practice') || path.startsWith('/p')
-      ? 'practice'
+    // 组卷：/exam/* 与学生作答页 /e/{slug}（用 '/e/' 收尾斜杠避免误吃 '/exam'）
+    path.startsWith('/exam') || path.startsWith(`${ROUTES.EXAM_RUN}/`)
+      ? ROUTES.EXAM_MANAGE
+      : path.startsWith(ROUTES.PRACTICE_MANAGE) || path.startsWith(`${ROUTES.PRACTICE_RUN}/`)
+      ? ROUTES.PRACTICE_MANAGE
       : path.startsWith(ROUTES.SQUARE) || path.startsWith(ROUTES.APP_RUN)
         ? ROUTES.SQUARE
         : path.startsWith('/me')
@@ -89,10 +96,16 @@ export function MobileTabBar(): JSX.Element {
           aria-label="我的"
         />
         <BottomNavigationAction
-          value="practice"
+          value={ROUTES.PRACTICE_MANAGE}
           label="练习"
           icon={<MenuBookIcon />}
           aria-label="每日一练"
+        />
+        <BottomNavigationAction
+          value={ROUTES.EXAM_MANAGE}
+          label="组卷"
+          icon={<AssignmentOutlinedIcon />}
+          aria-label="组卷"
         />
       </BottomNavigation>
     </Paper>

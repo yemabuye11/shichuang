@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { alpha } from '@mui/material/styles';
 import {
   Box,
@@ -15,85 +15,28 @@ import { useNavigate } from 'react-router-dom';
 import { PromptInput } from '@/components/generate/PromptInput';
 import { TypeSelector } from '@/components/generate/TypeSelector';
 import { ExampleChips } from '@/components/generate/ExampleChips';
-import { AppCard } from '@/components/square/AppCard';
-import { OpenCoursesSection } from '@/components/home/OpenCoursesSection';
 import { AiDisclaimer } from '@/components/common/AiDisclaimer';
-import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import { useAuth } from '@/hooks/useAuth';
 import { loginPath, ROUTES } from '@/config/routes';
 import { DOC_TYPES, MIN_PROMPT_LENGTH } from '@/config/constants';
 import { PRIMARY, SECONDARY } from '@/theme';
-import * as squareService from '@/services/squareService';
-import type { SquareItem } from '@/types/models';
 import type { AppType } from '@/types/enums';
 
 /**
- * 首页（UI-1）。
+ * 首页（UI-1）——板块重组后：**只保留生成类功能**。
  *
- * 视觉改版参考 www.haoyue01.cn（皓月运动会）的设计语言：超大主标题 + 副标题 +
- * 单一主 CTA 的 Hero、数据背书条、01–05 编号的核心亮点卡片、卡片网格入口区、
- * 底部 CTA。整体气质向「清新校园风」靠拢——留白充足、圆角、轻渐变、不花哨。
+ * 客户（野马）要求：首页第一板块就是生成入口（一句话生成 / 制作教案 / 课件），
+ * 非生成类板块（数据背书条、大家都在用、核心亮点、公开课资源索引等）一律移除；
+ * 「每日一练」不进首页，改为独立页面（入口保留在 TopNav / MobileTabBar）。
  *
- * 内容面向「师创 · 教师 AI 备课办公台」，与参考站的运动会主题无关。
+ * 视觉沿用 haoyue01.cn 的清新校园风：留白充足、圆角、轻渐变、不花哨。
  *
- * 未登录可看（P0-A3 硬性）：热门应用直接展示，
- * 但点「生成」会带 `?redirect=` 跳登录，登录后自动回到生成页并保留提示词。
+ * 未登录可看（P0-A3 硬性）：首页本身就是生成入口，
+ * 点生成会带 `?redirect=` 跳登录，登录后自动回到生成页并保留提示词。
  *
- * 设计约束（来自主理人）：
- * - 保留四个备课入口（写教案 / 做 PPT / 3D 课件 / 办公文档）作为核心功能区，卡片网格呈现；
- * - 底部保留「做互动应用」入口（即原提示词输入区）；
- * - 不改动除 HomePage 以外的业务组件；保持对 PromptInput / TypeSelector /
- *   ExampleChips / AppCard / AiDisclaimer 的引用不变；
- * - 配色沿用现有主题主色（PRIMARY / SECONDARY），不引入冲突新色板。
+ * 配色沿用现有主题主色（PRIMARY / SECONDARY），不引入冲突新色板。
  */
-
-/**
- * 数据背书条（占位示意）。
- *
- * ⚠️ 待补真实数据：以下数值均为「占位示意」，并非真实统计，正式上线前必须替换为
- * 后端统计接口返回的真实数字，禁止把这里的占位值当真对外宣传。
- */
-const STATS: readonly { value: string; unit: string; label: string }[] = [
-  { value: '1,200', unit: '+', label: '已服务的学校' },
-  { value: '38', unit: '万+', label: '生成的备课物料' },
-  { value: '120', unit: '万+', label: '累计节省备课工时（小时）' },
-  { value: '15', unit: '个', label: '覆盖学科' },
-];
-
-/** 核心亮点（01–05 编号卡片）。 */
-const FEATURES: readonly { no: string; icon: string; title: string; desc: string }[] = [
-  {
-    no: '01',
-    icon: '📝',
-    title: '上传教材大纲，AI 写教案',
-    desc: '上传章节要求或教材截图，几分钟产出教学目标、重难点、教学过程与作业，可直接打印。',
-  },
-  {
-    no: '02',
-    icon: '📊',
-    title: '一句话生成 PPT 课件',
-    desc: '描述主题与年级，自动分页并配演讲者备注，课堂直接放映，告别熬夜排版。',
-  },
-  {
-    no: '03',
-    icon: '🧊',
-    title: '3D 课件，让知识转起来',
-    desc: '几何、分子、天体等可旋转拆解的 Three.js 3D 模型，抽象概念一眼看懂。',
-  },
-  {
-    no: '04',
-    icon: '📄',
-    title: '办公文档自动整理',
-    desc: '通知、计划、总结、发言稿，套模板一键成稿，行政事务不再挤压备课时间。',
-  },
-  {
-    no: '05',
-    icon: '✨',
-    title: '互动应用，链接即发',
-    desc: '闯关、点名、单词卡……一句话生成网页应用，一个链接或二维码发班级群就能用。',
-  },
-];
 
 /** 文档入口图标（UI-1，沿用既有映射）。 */
 const DOC_ENTRY_ICONS: Record<
@@ -110,7 +53,7 @@ const DOC_ENTRY_ICONS: Record<
 /** 区块小标题（eyebrow + 主标题）样式，统一各 section 视觉节奏。 */
 function SectionHeading({ eyebrow, title }: { eyebrow: string; title: string }): JSX.Element {
   return (
-    <Stack spacing={0.75} sx={{ mb: { xs: 2.5, sm: 3 } }}>
+    <Stack spacing={0.75} sx={{ mb: { xs: 2, sm: 2.5 } }}>
       <Typography
         sx={{
           fontSize: 13,
@@ -136,26 +79,6 @@ export function HomePage(): JSX.Element {
   const [prompt, setPrompt] = useState('');
   const [appType, setAppType] = useState<AppType>('auto');
   const [error, setError] = useState('');
-  const [hot, setHot] = useState<SquareItem[]>([]);
-  const [hotLoading, setHotLoading] = useState(true);
-
-  // 热门应用：未登录也可读（`list_square` 是 SECURITY DEFINER，anon 可调用）
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const page = await squareService.list({ sort: 'hottest', limit: 4 });
-        if (alive) setHot([...page.items]);
-      } catch {
-        /* 首页热门失败不阻断主流程 */
-      } finally {
-        if (alive) setHotLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const handleSubmit = useCallback(() => {
     const text = prompt.trim();
@@ -276,76 +199,15 @@ export function HomePage(): JSX.Element {
           >
             免费开始备课
           </Button>
-          <Button
-            variant="text"
-            size="large"
-            onClick={() => navigate(ROUTES.SQUARE)}
-            sx={{ minHeight: 52, color: 'text.primary', fontWeight: 600, width: { xs: '100%', sm: 'auto' } }}
-          >
-            看看大家怎么做 ›
-          </Button>
         </Stack>
       </Box>
 
-      {/* ================= 数据背书条 ================= */}
-      {/* 注：STATS 为占位示意（待补真实数据），非真实统计，上线前替换。 */}
-      <Box
-        sx={{
-          mt: { xs: 3, sm: 4 },
-          p: { xs: 2.5, sm: 3 },
-          borderRadius: { xs: 4, sm: 5 },
-          border: '1px solid',
-          borderColor: 'divider',
-          bgcolor: '#fff',
-          boxShadow: '0 2px 12px rgba(27,31,39,0.05)',
-        }}
-      >
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
-            gap: { xs: 2, sm: 1 },
-          }}
-        >
-          {STATS.map((s) => (
-            <Box key={s.label} sx={{ textAlign: 'center', px: 1 }}>
-              <Typography
-                component="span"
-                sx={{
-                  fontWeight: 800,
-                  fontSize: { xs: 26, sm: 34 },
-                  lineHeight: 1.1,
-                  background: `linear-gradient(120deg, ${PRIMARY}, ${SECONDARY})`,
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                }}
-              >
-                {s.value}
-                <Box component="span" sx={{ fontSize: { xs: 16, sm: 20 }, ml: 0.25 }}>
-                  {s.unit}
-                </Box>
-              </Typography>
-              <Typography sx={{ fontSize: { xs: 12, sm: 14 }, color: 'text.secondary', mt: 0.5 }}>
-                {s.label}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
-        <Typography
-          sx={{
-            textAlign: 'center',
-            fontSize: 12,
-            color: 'text.disabled',
-            mt: 2,
-          }}
-        >
-          以上为示意数据，正式上线前补充真实统计
-        </Typography>
-      </Box>
+      {/* ================= 第一板块：生成入口 ================= */}
+      {/* 客户要求：首页第一板块就是生成入口——一句话生成 / 制作教案 / 课件。 */}
+      <Box sx={{ mt: { xs: 4, sm: 5 } }}>
+        <SectionHeading eyebrow="GENERATE" title="一句话，开始生成" />
 
-      {/* ================= 做互动应用（原提示词输入区，现前置到首屏下方） ================= */}
-      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
-        <SectionHeading eyebrow="INTERACTIVE APPS" title="做互动应用 · 一句话生成" />
+        {/* ---- 一句话生成：大输入框 ---- */}
         <Box
           sx={{
             borderRadius: { xs: 4, sm: 5 },
@@ -376,13 +238,14 @@ export function HomePage(): JSX.Element {
               endIcon={<ArrowForwardIcon />}
               sx={{ minHeight: 52, px: 3.5, fontSize: 16, width: { xs: '100%', sm: 'auto' } }}
             >
-              生成应用
+              一句话生成
             </Button>
           </Box>
 
           {/* 8 类胶囊 */}
           <Box sx={{ mt: 2.5 }}>
-            <TypeSelector value={appType} onChange={setAppType} variant="chips" />
+            {/* 营销首页不展示积分数字（积分口径由生成页统一说明） */}
+            <TypeSelector value={appType} onChange={setAppType} variant="chips" showCost={false} />
           </Box>
 
           {/* 示例 chips */}
@@ -396,114 +259,13 @@ export function HomePage(): JSX.Element {
             />
           </Box>
         </Box>
-      </Box>
 
-      {/* ================= 大家都在用 ================= */}
-      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2.5 }}>
-          <SectionHeading eyebrow="COMMUNITY" title="大家都在用" />
-          <Button
-            variant="text"
-            size="large"
-            onClick={() => navigate(ROUTES.SQUARE)}
-            sx={{ minHeight: 44, color: 'primary.main', fontWeight: 600 }}
-          >
-            查看全部 ›
-          </Button>
-        </Stack>
-
-        {hotLoading ? (
-          <InlineLoading message="正在加载热门应用…" />
-        ) : hot.length === 0 ? (
-          <Typography sx={{ fontSize: 15, color: 'text.secondary', py: 3, textAlign: 'center' }}>
-            还没有人发布应用，你可以成为第一个。
-          </Typography>
-        ) : (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: {
-                xs: 'repeat(1, minmax(0, 1fr))',
-                sm: 'repeat(2, minmax(0, 1fr))',
-                md: 'repeat(4, minmax(0, 1fr))',
-              },
-              gap: 2,
-            }}
-          >
-            {hot.map((item) => (
-              <AppCard key={item.id} item={item} hot />
-            ))}
-          </Box>
-        )}
-      </Box>
-
-      {/* ================= 核心亮点（01–05） ================= */}
-      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
-        <SectionHeading eyebrow="CORE FEATURES" title="一个台子，备齐全部课程物料" />
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))' },
-            gap: 2,
-          }}
+        {/* ---- 制作教案 / 课件 / 办公文档：文档类一键生成 ---- */}
+        <Typography
+          sx={{ fontSize: 15, fontWeight: 700, color: 'text.primary', mt: 3, mb: 1.5 }}
         >
-          {FEATURES.map((f) => (
-            <Box
-              key={f.no}
-              sx={{
-                p: { xs: 2.25, sm: 2.75 },
-                borderRadius: { xs: 4, sm: 5 },
-                border: '1px solid',
-                borderColor: 'divider',
-                bgcolor: '#fff',
-                boxShadow: '0 2px 12px rgba(27,31,39,0.05)',
-                transition: 'transform .18s, box-shadow .18s, border-color .18s',
-                '&:hover': {
-                  transform: 'translateY(-3px)',
-                  borderColor: 'primary.main',
-                  boxShadow: `0 14px 30px ${alpha(PRIMARY, 0.16)}`,
-                },
-              }}
-            >
-              <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1.25 }}>
-                <Box
-                  sx={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: '14px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 800,
-                    fontSize: 18,
-                    color: '#fff',
-                    background: `linear-gradient(135deg, ${PRIMARY}, ${SECONDARY})`,
-                    boxShadow: `0 6px 16px ${alpha(PRIMARY, 0.28)}`,
-                  }}
-                >
-                  {f.no}
-                </Box>
-                <Typography sx={{ fontSize: 22 }} aria-hidden="true">
-                  {f.icon}
-                </Typography>
-              </Stack>
-              <Typography sx={{ fontSize: 17, fontWeight: 700, color: 'text.primary' }}>
-                {f.title}
-              </Typography>
-              <Typography sx={{ fontSize: 14, color: 'text.secondary', mt: 0.75, lineHeight: 1.7 }}>
-                {f.desc}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
-      </Box>
-
-      {/* ================= 公开课资源（外链索引板块） ================= */}
-      <OpenCoursesSection />
-
-      {/* ================= 备课入口区（四/五类一键入口，UI-1） ================= */}
-      <Box sx={{ mt: { xs: 5, sm: 7 } }}>
-        <SectionHeading eyebrow="DOCUMENTS" title="备课文档 · 一键生成" />
+          或者，直接选一个要做的物料
+        </Typography>
         <Box
           sx={{
             display: 'grid',
@@ -560,7 +322,7 @@ export function HomePage(): JSX.Element {
       {/* ================= 底部 CTA ================= */}
       <Box
         sx={{
-          mt: { xs: 5, sm: 7 },
+          mt: { xs: 5, sm: 6 },
           p: { xs: 3.5, sm: 5 },
           borderRadius: { xs: 4, sm: 6 },
           textAlign: 'center',
