@@ -54,4 +54,5 @@ create policy textbooks_delete_owner on storage.objects
     and public.textbook_object_owner(name) = (select auth.uid())
   );
 
-comment on table storage.objects is 'textbooks bucket stores private electronic textbook files under tb/{owner_id}/';
+-- 不对 storage.objects 写 COMMENT：该系统表由 Supabase Storage 管理，
+-- SQL Editor 角色通常不是表 owner；注释不影响桶或 RLS 策略，故省略。
