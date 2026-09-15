@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
+import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
@@ -237,7 +237,7 @@ export function RichTextEditor({ blocks, onChange }: RichTextEditorProps): JSX.E
     ],
     content: initialHtml,
     immediatelyRender: false,
-    onUpdate: ({ editor: ed }) => {
+    onUpdate: ({ editor: ed }: { editor: Editor }) => {
       onChange(htmlToBlocks(ed.getHTML(), metaIndexRef.current));
     },
   });
