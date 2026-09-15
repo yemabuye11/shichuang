@@ -21,7 +21,9 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { SystemNoticeBanner } from '@/components/common/SystemNoticeBanner';
 import * as rechargeService from '@/services/rechargeService';
 import * as noticeService from '@/services/noticeService';
+import * as paymentQrService from '@/services/paymentQrService';
 import type { PaymentConfig, RechargeRequest } from '@/services/rechargeService';
+import type { PaymentQrConfig } from '@/services/paymentQrService';
 import type { SystemNotice } from '@/services/noticeService';
 import type { MembershipPlan } from '@/types/models';
 import { formatCny } from '@/utils/format';
@@ -44,6 +46,7 @@ export function RechargePage(): JSX.Element {
   const toast = useToast();
 
   const [cfg, setCfg] = useState<PaymentConfig | null>(null);
+  const [qr, setQr] = useState<PaymentQrConfig>({ imageUrl: '', title: '', notice: '' });
   const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [notice, setNotice] = useState<SystemNotice | null>(null);
   const [recentRequests, setRecentRequests] = useState<RechargeRequest[]>([]);
@@ -60,13 +63,15 @@ export function RechargePage(): JSX.Element {
     setLoading(true);
     setError('');
     try {
-      const [c, p, mine, n] = await Promise.all([
+      const [c, q, p, mine, n] = await Promise.all([
         rechargeService.getPaymentConfig(),
+        paymentQrService.getPaymentQrConfig(),
         rechargeService.listPlans(),
         rechargeService.listMyRequests().catch(() => [] as RechargeRequest[]),
         noticeService.getSystemNotice().catch(() => null),
       ]);
       setCfg(c);
+      setQr(q);
       setPlans(p);
       setRecentRequests(mine);
       setNotice(n);
@@ -150,6 +155,9 @@ export function RechargePage(): JSX.Element {
       <Alert severity="info" sx={{ mt: 2.5, lineHeight: 1.7 }}>
         {tip}
       </Alert>
+
+      {/* ---- 管理员配置的收款码（system_config.payment_qr，未配置时整块不显示） ---- */}
+      <PaymentQrBlock cfg={qr} />
 
       {/* ---- 套餐卡片 ---- */}
       <Box sx={{ mt: 3 }}>
@@ -321,6 +329,61 @@ export function RechargePage(): JSX.Element {
       >
         返回
       </Button>
+    </Box>
+  );
+}
+
+/**
+ * 管理员在后台「收款码配置」里上传的那张收款码（system_config.payment_qr）。
+ *
+ * ⚠️ 这里**只是展示一张图片**：老师扫码线下转账后，由管理员在后台手工加积分，
+ * 系统不会自动到账、也没有接任何支付接口。
+ *
+ * 未配置（imageUrl 为空）时返回 null —— 什么都不显示，不报错、不出破图。
+ * 图片加载失败（链接失效 / 防盗链）时降级为一条提示，同样不显示破图。
+ */
+function PaymentQrBlock({ cfg }: { cfg: PaymentQrConfig }): JSX.Element | null {
+  const [broken, setBroken] = useState(false);
+  const url = (cfg.imageUrl ?? '').trim();
+  if (!url) return null;
+
+  return (
+    <Box sx={{ mt: 3, p: 2.5, borderRadius: 3, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+        <QrCode2Icon color="primary" aria-hidden="true" />
+        <Typography sx={{ fontSize: 16, fontWeight: 700 }}>{cfg.title || '扫码充值'}</Typography>
+      </Stack>
+
+      {broken ? (
+        <Alert severity="warning">收款码图片暂时加载不出来，请联系管理员检查图片链接。</Alert>
+      ) : (
+        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+          <Box
+            component="img"
+            key={url}
+            src={url}
+            alt={cfg.title || '收款码'}
+            onError={() => setBroken(true)}
+            sx={{
+              width: '100%',
+              maxWidth: 260,
+              aspectRatio: '1 / 1',
+              objectFit: 'contain',
+              borderRadius: 1.5,
+              border: '1px solid',
+              borderColor: 'divider',
+              bgcolor: '#fff',
+            }}
+          />
+        </Box>
+      )}
+
+      <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 1.5, lineHeight: 1.7, textAlign: 'center' }}>
+        {cfg.notice || '转账后请联系管理员加积分'}
+      </Typography>
+      <Typography sx={{ fontSize: 12.5, color: 'text.disabled', mt: 0.75, textAlign: 'center' }}>
+        这是线下人工充值：扫码转账后请提交凭证，管理员核对后手工加积分，系统不会自动到账。
+      </Typography>
     </Box>
   );
 }
