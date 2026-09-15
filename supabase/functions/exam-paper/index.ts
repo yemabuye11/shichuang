@@ -5,6 +5,10 @@
  *   action: 'generate'  按 年级+科目+单元(+教材版本) / 知识点 / 原卷变式 → 生成一套新测验卷
  *   action: 'import'    老师上传原卷文本 → AI 原样结构化（不改编）→ 直接当测验卷用
  *
+ * 三个 action 产出试卷后，都会把每题**顺手沉淀进题库** `question_bank`
+ * （见 migrations/0041_question_bank.sql）：owner_id = 调用者、is_public = false、
+ * 带上学科/年级/单元/知识点。题库只是副产物，**写失败绝不阻断出卷**，只记日志。
+ *
  * 设计要点（见 docs/PLAN_组卷.md）：
  * 1. 骨架照抄 `practice/index.ts`，复用 requireUser / 积分 reserve→settle→refund / LLM 适配器；
  * 2. 鉴权：parse/generate/import 都要求老师登录（未登录 401）；
@@ -55,7 +59,14 @@ const SYSTEM_PROMPT = [
   '题型共四种：choice（选择题）、fill（填空题）、judge（判断题）、subjective（主观题：简答/作文/应用题/计算等）。',
   '填空题若有多个空，把这些空用竖线 | 合并写在同一个字符串里；每个空若有多个可接受的答案也用 | 分隔。',
   '客观题（choice/fill/judge）必须有解析 explanation；主观题必须有 answer（字符串数组，可多条要点）与 explanation（评分要点/参考答案）。',
-  '题目难度需匹配所给年级，不拔高、不超纲。',
+  // ↓↓↓ 命题质量红线（客户验收清单：老师发布前必须能逐题审，AI 端先保证基本盘） ↓↓↓
+  '【知识点】每题的 knowledgePoint 必须具体、准确，贴合所给年级与单元（如"多音字辨析""两位数进位加法"），不得编造超纲知识点，不得用"第一单元""基础知识"这类笼统词敷衍。',
+  '【不重复】同一套卷内严禁出现重复题、或只换个数字/换个主语的雷同题；每题必须独立考察一个点。',
+  '【答案唯一且正确】选择题有且只有一个正确选项且必须真的正确，正确选项位置不要连续集中在同一个字母；判断题对错明确无争议；填空答案无歧义、无多解。',
+  '【每题必有解析】生成/改编的题目每一题都要写 explanation：客观题写清解题思路，主观题写参考答案与评分要点。',
+  '【主观题评分点】subjective 的 answer 至少给 2 条得分要点，explanation 写明分值如何分配（如"每点 2 分，共 4 分"）。',
+  '【难度匹配年级】不拔高、不超纲，题干表述与用词符合该年级学生的阅读水平。',
+  // ↑↑↑ 命题质量红线结束 ↑↑↑
   '输出结构见下方 user 段说明。',
   '只输出一个 ' + JSON_FENCE + ' 代码块，代码块外不要有任何文字。',
 ].join('\n');
@@ -75,6 +86,12 @@ interface SectionSpec {
 interface ParseBody {
   action: 'parse';
   text: string;
+  /** 可选：原卷所属学科（解析后沉淀进题库时用）。 */
+  subject?: string | null;
+  /** 可选：原卷所属年级（同上）。 */
+  grade?: string | null;
+  /** 可选：原卷所属单元（同上）。 */
+  unit?: string | null;
 }
 
 interface GenerateBody {
@@ -93,6 +110,12 @@ interface GenerateBody {
 interface ImportBody {
   action: 'import';
   text: string;
+  /** 可选：原卷所属学科（结构化后沉淀进题库时用）。 */
+  subject?: string | null;
+  /** 可选：原卷所属年级（同上）。 */
+  grade?: string | null;
+  /** 可选：原卷所属单元（同上）。 */
+  unit?: string | null;
 }
 
 type ExamBody = ParseBody | GenerateBody | ImportBody;
@@ -118,6 +141,15 @@ interface ExamSection {
 interface ExamPaper {
   title: string;
   sections: ExamSection[];
+  /** 知识点清单（parse 由模型抽取；generate/import 可能没有）。 */
+  knowledgePoints?: string[];
+}
+
+/** 题库沉淀时带上的定位信息（学科 / 年级 / 单元）。 */
+interface BankMeta {
+  subject: string | null;
+  grade: string | null;
+  unit: string | null;
 }
 
 /** 系统配置 `exam` 的结构。 */
@@ -285,6 +317,13 @@ function parsePaper(raw: string): ExamPaper {
   const title = typeof obj.title === 'string' ? obj.title : '未命名测验卷';
   const sections: ExamSection[] = [];
 
+  // 知识点清单（可选；只在 parse 路径由模型给出，缺失不影响主流程）
+  const knowledgePoints: string[] = Array.isArray(obj.knowledgePoints)
+    ? (obj.knowledgePoints as unknown[])
+        .map((k) => String(k ?? '').trim())
+        .filter((k) => k.length > 0)
+    : [];
+
   for (const sec of obj.sections as unknown[]) {
     if (typeof sec !== 'object' || sec === null) {
       throw new AppError('VALIDATE_FAILED', 'AI 返回的试卷格式有问题，请重试');
@@ -335,7 +374,76 @@ function parsePaper(raw: string): ExamPaper {
     sections.push({ sectionTitle, questions });
   }
 
-  return { title, sections };
+  return { title, sections, knowledgePoints };
+}
+
+// ---------------------------------------------------------------------------
+// 题库沉淀（T11 配套，见 supabase/migrations/0041_question_bank.sql）
+// ---------------------------------------------------------------------------
+
+/**
+ * 把一套卷的每题顺手写进题库，供老师下次按 学科/年级/单元/知识点 复用。
+ *
+ * ⚠️ 设计红线：
+ * - owner_id 一律取调用者 userId（服务端强制，不信任入参）；is_public 恒为 false；
+ * - 走 `adminClient()`（service_role）绕过 RLS，因为老师对自己行的写权限本来就有，
+ *   这里只是避免逐行触发策略判断、且保证批量写入的原子性；
+ * - **失败绝不阻断主流程**：题库只是副产物，写不进去也要把试卷正常返回给老师，
+ *   只打日志（日志里绝不出现任何密钥）。
+ *
+ * @param userId 调用者（老师）的 uid。
+ * @param paper 已校验通过的试卷。
+ * @param meta 学科 / 年级 / 单元定位信息。
+ * @returns 成功写入的题数（失败返回 0）。
+ */
+async function persistToQuestionBank(
+  userId: string,
+  paper: ExamPaper,
+  meta: BankMeta,
+): Promise<number> {
+  try {
+    if (!userId) return 0;
+
+    const rows: Record<string, unknown>[] = [];
+    for (const sec of paper.sections) {
+      for (const q of sec.questions) {
+        rows.push({
+          owner_id: userId,
+          knowledge_point_id: null,
+          subject: meta.subject,
+          grade: meta.grade,
+          unit: meta.unit,
+          qtype: q.qtype,
+          stem: q.stem,
+          options: q.options ?? null,
+          answer: q.answer,
+          explanation: q.explanation ?? null,
+          difficulty: null,
+          knowledge_point: q.knowledgePoint ?? null,
+          score: typeof q.score === 'number' ? q.score : 1,
+          is_public: false,
+          usage_count: 0,
+        });
+      }
+    }
+    if (rows.length === 0) return 0;
+
+    // 一次最多 200 题，超了截断（防止单卷异常撑爆请求体）
+    const { error } = await adminClient()
+      .from('question_bank')
+      .insert(rows.slice(0, 200));
+    if (error) {
+      console.error('[exam-paper] 题库沉淀失败（不影响出卷）：', error.message);
+      return 0;
+    }
+    return rows.slice(0, 200).length;
+  } catch (err) {
+    console.error(
+      '[exam-paper] 题库沉淀异常（不影响出卷）：',
+      err instanceof Error ? err.message : String(err),
+    );
+    return 0;
+  }
 }
 
 /** 估算 maxOutputTokens（主观题更肥）。 */
@@ -430,7 +538,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // ---- parse 免费：直接调模型返回，不走积分 ----
   if (action === 'parse') {
-    const userPrompt = buildParseUserPrompt((body as ParseBody).text);
+    const parseBody = body as ParseBody;
+    const userPrompt = buildParseUserPrompt(parseBody.text);
     try {
       const raw = await callModel(
         adapter,
@@ -438,7 +547,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
         modelCfg,
       );
       const paper = parsePaper(raw);
-      return jsonOk({ ok: true, paper });
+      // 副产物：顺手沉淀进题库（失败不影响解析结果）
+      const bankSaved = await persistToQuestionBank(caller.userId, paper, {
+        subject: parseBody.subject ?? null,
+        grade: parseBody.grade ?? null,
+        unit: parseBody.unit ?? null,
+      });
+      return jsonOk({ ok: true, paper, bankSaved });
     } catch (err) {
       const e = toAppError(err);
       return jsonError(e.httpStatus, { code: e.code, message: e.message });
@@ -456,14 +571,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   let cost = 0;
   let sectionsForTokens: SectionSpec[] = [];
+  // 题库沉淀用的定位信息：generate 全部有；import 由前端可选传入
+  let bankMeta: BankMeta = { subject: null, grade: null, unit: null };
   if (action === 'import') {
     cost = Number(examCfg.importCostCredits ?? 0.5);
     // import 不知道结构，按默认平均估算 token 上限
     sectionsForTokens = [{ sectionTitle: 'x', qtype: 'choice', count: 20, score: 1 }];
+    const imp = body as ImportBody;
+    bankMeta = { subject: imp.subject ?? null, grade: imp.grade ?? null, unit: imp.unit ?? null };
   } else {
     const gen = body as GenerateBody;
     sectionsForTokens = gen.sections;
     cost = computeExamCost(gen.sections, examCfg, typeCfg?.creditCost ?? 2);
+    bankMeta = { subject: gen.subject ?? null, grade: gen.grade ?? null, unit: gen.unit ?? null };
   }
 
   // ---- 预扣积分 ----
@@ -532,7 +652,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       p_ms: generationMs,
     });
 
-    return jsonOk({ ok: true, paper });
+    // 副产物：整套卷的每题沉淀进题库（失败不影响出卷，已扣积分照常结算）
+    const bankSaved = await persistToQuestionBank(caller.userId, paper, bankMeta);
+
+    return jsonOk({ ok: true, paper, bankSaved });
   } catch (err) {
     if (reserved) {
       try {
