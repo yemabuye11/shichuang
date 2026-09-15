@@ -36,6 +36,19 @@ export interface TextbookCascadeProps {
 /** 级联下拉的「全部」占位值（与真实维度值不冲突）。 */
 const ALL = '__all__';
 
+/**
+ * 空库时的常用教材快捷入口。
+ *
+ * 这些不是“虚构教材知识”，点击后只会为当前教师创建一条待核对的版本记录，
+ * 让生成页先能完成绑定；教材正文仍需教师上传或补写后才进入检索上下文。
+ */
+const COMMON_PRESETS: readonly CreateTextbookVersionInput[] = [
+  { year: '2024', grade: '初三', subject: '数学', publisher: '人民教育出版社', version: '人教版 2024版', chapter: '' },
+  { year: '2024', grade: '初三', subject: '语文', publisher: '人民教育出版社', version: '人教版 2024版', chapter: '' },
+  { year: '2024', grade: '六年级', subject: '语文', publisher: '人民教育出版社', version: '部编版 2024版', chapter: '' },
+  { year: '2024', grade: '六年级', subject: '数学', publisher: '人民教育出版社', version: '人教版 2024版', chapter: '' },
+];
+
 export function TextbookCascade({
   options,
   versions,
@@ -54,6 +67,8 @@ export function TextbookCascade({
   const [form, setForm] = useState<CreateTextbookVersionInput>({ year: String(new Date().getFullYear()), version: '', publisher: '', subject: '', grade: '', chapter: '', file: null });
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [quickCreating, setQuickCreating] = useState<string | null>(null);
+  const [quickError, setQuickError] = useState('');
 
   /** 按已选维度逐级过滤版本列表（层级间互相约束即为「级联」）。 */
   const filtered = useMemo(
@@ -83,7 +98,27 @@ export function TextbookCascade({
 
   const openCreate = (): void => {
     setFormError('');
+    setQuickError('');
     setDialogOpen(true);
+  };
+
+  const createPreset = async (preset: CreateTextbookVersionInput): Promise<void> => {
+    if (!onCreateVersion || quickCreating) return;
+    const key = `${preset.grade}-${preset.subject}-${preset.version}`;
+    setQuickCreating(key);
+    setQuickError('');
+    try {
+      const created = await onCreateVersion(preset);
+      onSelectVersion(created.id);
+      setGrade(created.grade);
+      setSubject(created.subject);
+      setPublisher(created.publisher);
+      setVersionDim(created.version);
+    } catch (err) {
+      setQuickError(err instanceof Error ? err.message : '教材版本创建失败，请改用手动新建');
+    } finally {
+      setQuickCreating(null);
+    }
   };
 
   const submitCreate = async (): Promise<void> => {
@@ -204,11 +239,36 @@ export function TextbookCascade({
       </Stack>
 
       {versions.length === 0 ? (
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mt: 1.25 }}>
-          <Typography sx={{ fontSize: 13, color: 'text.secondary', lineHeight: 1.6, flex: 1 }}>
-            暂无教材版本，可直接跳过；也可以现在新建一套教材，后续生成会优先参考已核对内容。
+        <Stack spacing={1} sx={{ mt: 1.25 }}>
+          <Typography sx={{ fontSize: 13, color: 'text.secondary', lineHeight: 1.6 }}>
+            还没有教材版本。可以先选一个常用版本完成绑定，随后再上传电子教材或补写章节；未核对内容不会直接当作教材事实使用。
           </Typography>
-          {onCreateVersion ? <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={openCreate} disabled={loading}>新建教材版本</Button> : null}
+          {onCreateVersion ? (
+            <>
+              <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', gap: 0.75 }}>
+                {COMMON_PRESETS.map((preset) => {
+                  const key = `${preset.grade}-${preset.subject}-${preset.version}`;
+                  return (
+                    <Button
+                      key={key}
+                      size="small"
+                      variant="outlined"
+                      startIcon={<MenuBookIcon />}
+                      onClick={() => void createPreset(preset)}
+                      disabled={loading || quickCreating !== null}
+                      sx={{ textTransform: 'none' }}
+                    >
+                      {quickCreating === key ? '绑定中…' : `${preset.grade}·${preset.subject}·${preset.version}`}
+                    </Button>
+                  );
+                })}
+              </Stack>
+              <Button size="small" variant="text" startIcon={<AddIcon />} onClick={openCreate} disabled={loading || quickCreating !== null} sx={{ alignSelf: 'flex-start' }}>
+                手动新建或上传电子教材
+              </Button>
+              {quickError ? <Typography sx={{ fontSize: 13, color: 'error.main' }}>{quickError}</Typography> : null}
+            </>
+          ) : null}
         </Stack>
       ) : filtered.length === 0 ? (
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mt: 1.25 }}>

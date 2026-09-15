@@ -1,4 +1,5 @@
 import { getSupabase, functionsBaseUrl } from './supabaseClient';
+import { env } from '@/config/env';
 import { AppError } from './http/errors';
 import { mockGenerate } from './mock/mockGenerate';
 import { isMockMode } from '@/config/env';
@@ -180,20 +181,44 @@ async function runRemote(
   const sb = getSupabase();
   if (!sb) throw new AppError('NETWORK', '还没有连接云端服务');
 
-  const { data: sessionData } = await sb.auth.getSession();
-  const token = sessionData?.session?.access_token;
+  let { data: sessionData } = await sb.auth.getSession();
+  let session = sessionData?.session ?? null;
+  // 移动端 / 长时间打开页面时，getSession 可能拿到临近过期的本地会话。
+  // 先主动刷新，避免页面看起来已登录但 Edge 收到已过期 JWT。
+  const expiresAt = session?.expires_at ?? 0;
+  if (!session || expiresAt > 0 && expiresAt - Math.floor(Date.now() / 1000) < 60) {
+    const refreshed = await sb.auth.refreshSession();
+    session = refreshed.data.session ?? null;
+  }
+  let token = session?.access_token;
   if (!token) throw new AppError('UNAUTHORIZED', '登录状态已失效，请重新登录');
 
-  const res = await fetch(`${functionsBaseUrl()}/generate`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify(req),
-    signal: controller.signal,
-  });
+  const request = async (accessToken: string): Promise<Response> =>
+    fetch(`${functionsBaseUrl()}/generate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        // 与 supabase-js functions.invoke 保持一致；部分网关配置会要求 anon key
+        // 才把 Authorization 头转发给 verify_jwt=true 的 Edge Function。
+        apikey: env.supabaseAnonKey,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+
+  let res = await request(token);
+  // 只对鉴权失败重试一次。401 在预扣积分之前返回，因此不会造成重复扣费；
+  // 其他业务错误必须原样交给页面，避免重复提交生成任务。
+  if (res.status === 401) {
+    const refreshed = await sb.auth.refreshSession();
+    const refreshedToken = refreshed.data.session?.access_token;
+    if (refreshedToken && refreshedToken !== token) {
+      token = refreshedToken;
+      res = await request(token);
+    }
+  }
 
   if (!res.ok || !res.body) {
     const payload = await safeJson(res);
