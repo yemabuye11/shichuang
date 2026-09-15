@@ -9,7 +9,6 @@ import {
 } from '@mui/material';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import { StatsPanel } from '@/components/admin/StatsPanel';
-import { CodeBatchForm } from '@/components/admin/CodeBatchForm';
 import { ReportList } from '@/components/admin/ReportList';
 import { UserList } from '@/components/admin/UserList';
 import { RechargeSettingsPanel } from '@/components/admin/RechargeSettingsPanel';
@@ -17,18 +16,23 @@ import { RechargeRequestsPanel } from '@/components/admin/RechargeRequestsPanel'
 import { NoticeSettingsPanel } from '@/components/admin/NoticeSettingsPanel';
 import { AppTypeCreditsPanel } from '@/components/admin/AppTypeCreditsPanel';
 import { PracticeSettingsPanel } from '@/components/admin/PracticeSettingsPanel';
+import { ExamSettingsPanel } from '@/components/admin/ExamSettingsPanel';
+import { PaymentQrPanel } from '@/components/admin/PaymentQrPanel';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
-import type { AdminStats, MembershipPlan, ReportItem } from '@/types/models';
+import type { AdminStats, ReportItem } from '@/types/models';
 
 /**
  * 管理员后台（Q10 极简三功能 + 客户新增的「查看注册用户」「收款设置」「待充值」）：
- * - Tab「概览」：数据看板、批量生成兑换码、举报处理与下架；
+ * - Tab「概览」：数据看板、举报处理与下架（批量生成兑换码已按客户要求移除）；
  * - Tab「注册用户」：查看注册用户列表（邮箱 / 昵称 / 注册时间 / 积分余额 / 生成次数），仅管理员可见；
  * - Tab「收款设置」：配置野马的个人微信 / 支付宝收款码 + 引导文案；
  * - Tab「待充值」：核对老师提交的充值凭证，一键到账（走 admin_approve_recharge）；
  * - Tab「公告设置」：系统公告 + 管理员微信号（走 system_config.system_notice）；
+ * - Tab「每日一练配置」：练习天数折扣等（走 system_config.practice）；
+ * - Tab「组卷配置」：题型单题积分 / 阶梯折扣 / 折扣下限 / 识别积分 / 默认题量（走 system_config.exam）；
+ * - Tab「收款码配置」：老师端充值页展示的收款码图片（走 system_config.payment_qr，仅展示图片，不接支付）；
  * - Tab「内容类型积分」：直接改各内容类型的单次生成积分消耗（走 admin_upsert_app_type）。
  *
  * 整个页面处于 `RequireAuth requireAdmin` 路由守卫内，非管理员看不到任何入口。
@@ -38,7 +42,6 @@ export function AdminPage(): JSX.Element {
 
   const [tab, setTab] = useState(0);
   const [stats, setStats] = useState<AdminStats | null>(null);
-  const [plans, setPlans] = useState<MembershipPlan[]>([]);
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -47,13 +50,11 @@ export function AdminPage(): JSX.Element {
     setLoading(true);
     setError('');
     try {
-      const [s, p, r] = await Promise.all([
+      const [s, r] = await Promise.all([
         adminService.stats().catch(() => null),
-        adminService.listPlans().catch(() => [] as MembershipPlan[]),
         adminService.listReports('pending').catch(() => [] as ReportItem[]),
       ]);
       setStats(s);
-      setPlans(p);
       setReports(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载后台数据失败');
@@ -106,14 +107,14 @@ export function AdminPage(): JSX.Element {
         <Box>
           <Typography sx={{ fontSize: { xs: 21, sm: 24 }, fontWeight: 800 }}>管理员后台</Typography>
           <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 0.25 }}>
-            发兑换码 · 看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置 · 积分单价
+            看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置 · 每日一练 · 组卷 · 收款码 · 积分单价
           </Typography>
         </Box>
       </Stack>
 
       {isMockMode() ? (
         <Alert severity="info" sx={{ mt: 2.5 }}>
-          演示模式：这里的兑换码、看板数据与举报都保存在本机浏览器里，
+          演示模式：这里的看板数据与举报都保存在本机浏览器里，
           连接真实服务后会改为读写云端数据库。
         </Alert>
       ) : null}
@@ -131,6 +132,8 @@ export function AdminPage(): JSX.Element {
         <Tab label="待充值" />
         <Tab label="公告设置" />
         <Tab label="每日一练配置" />
+        <Tab label="组卷配置" />
+        <Tab label="收款码配置" />
         <Tab label="内容类型积分" />
       </Tabs>
 
@@ -157,7 +160,6 @@ export function AdminPage(): JSX.Element {
 
           <Stack spacing={3} sx={{ mt: 3 }}>
             <StatsPanel stats={stats} loading={loading} />
-            <CodeBatchForm plans={plans.map((p) => ({ id: p.id, name: p.name, credits: p.credits }))} />
             <ReportList
               items={reports}
               loading={loading}
@@ -186,6 +188,14 @@ export function AdminPage(): JSX.Element {
       ) : tab === 5 ? (
         <Box sx={{ mt: 3 }}>
           <PracticeSettingsPanel />
+        </Box>
+      ) : tab === 6 ? (
+        <Box sx={{ mt: 3 }}>
+          <ExamSettingsPanel />
+        </Box>
+      ) : tab === 7 ? (
+        <Box sx={{ mt: 3 }}>
+          <PaymentQrPanel />
         </Box>
       ) : (
         <Box sx={{ mt: 3 }}>
