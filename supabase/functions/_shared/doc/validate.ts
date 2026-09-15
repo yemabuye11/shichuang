@@ -26,6 +26,20 @@ export interface DocValidationResult {
 /** 默认体积上限：256KB（文档类富文本允许比单文件 HTML 略大）。 */
 export const MAX_DOC_BYTES = 262_144;
 
+const PPT_MIN_SLIDES = 12;
+const PPT_MAX_SLIDES = 22;
+const PPT_MIN_VISUALS = 3;
+const PPT_MIN_NOTES_CHARS = 30;
+const PPT_MIN_BODY_CHARS = 36;
+const PPT_PLACEHOLDER_PATTERNS: readonly RegExp[] = [
+  /建议配图/,
+  /此处(?:插入|添加|放置)/,
+  /教师可自行补充/,
+  /学生自行阅读课本/,
+  /待补|待完善|TODO|占位符/i,
+  /\b同上\b/,
+];
+
 /**
  * 从模型原始输出中抽取 ```json 代码块内容。
  *
@@ -138,7 +152,83 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
     errors.push('文档中残留 TODO 占位，请补全内容');
   }
 
+  if (model.kind === 'ppt' && Array.isArray(model.slides)) {
+    validatePptQuality(model as DocModel, errors);
+  }
+
   return { ok: errors.length === 0, errors, model: errors.length === 0 ? (model as DocModel) : null };
+}
+
+/**
+ * PPT 质量门禁：结构合法不等于能上课。
+ *
+ * 这些规则与 `doc_type:ppt` 提示词的硬下限保持一致，失败会进入一次模型自修复，
+ * 仍不达标则退款，避免把“能解析的文字大纲”当成合格课件交付给教师。
+ */
+function validatePptQuality(model: DocModel, errors: string[]): void {
+  const slides = model.slides ?? [];
+  if (slides.length < PPT_MIN_SLIDES) {
+    errors.push(`PPT 页数不足：当前 ${slides.length} 页，至少需要 ${PPT_MIN_SLIDES} 页`);
+  }
+  if (slides.length > PPT_MAX_SLIDES) {
+    errors.push(`PPT 页数过多：当前 ${slides.length} 页，不应超过 ${PPT_MAX_SLIDES} 页`);
+  }
+
+  let visuals = 0;
+  let charts = 0;
+  let placeholderCount = 0;
+  const subjectText = `${model.meta?.subject ?? ''} ${model.meta?.title ?? ''}`;
+  const dataLikeSubject = /数学|物理|化学|生物|地理|科学|信息技术|函数|统计|实验|数据|图像/.test(subjectText);
+
+  slides.forEach((slide, index) => {
+    const body = Array.isArray(slide.body) ? slide.body : [];
+    const notesChars = (slide.notes ?? '').trim().length;
+    const bodyChars = body
+      .map((block) => {
+        const value = [block.text, block.caption, ...(block.items ?? []), ...(block.header ?? []), ...(block.rows ?? []).flat()]
+          .filter(Boolean)
+          .join(' ');
+        for (const pattern of PPT_PLACEHOLDER_PATTERNS) {
+          if (pattern.test(value)) placeholderCount += 1;
+        }
+        if (block.type === 'chart' && block.chart) {
+          const hasPoints = (block.chart.points ?? []).length >= 3;
+          const hasBars = (block.chart.categories ?? []).length >= 2 && (block.chart.values ?? []).length >= 2;
+          if (hasPoints || hasBars) {
+            charts += 1;
+            visuals += 1;
+          }
+        } else if (block.type === 'image' && typeof block.src === 'string' && block.src.startsWith('data:image/')) {
+          visuals += 1;
+        }
+        return value;
+      })
+      .join(' ')
+      .trim().length;
+
+    if (index > 0 && body.length < 2) {
+      errors.push(`第 ${index + 1} 页正文块不足：至少需要 2 个结构化内容块`);
+    }
+    if (index > 0 && bodyChars < PPT_MIN_BODY_CHARS) {
+      errors.push(`第 ${index + 1} 页内容过薄：正文少于 ${PPT_MIN_BODY_CHARS} 字`);
+    }
+    if (index > 0 && notesChars < PPT_MIN_NOTES_CHARS) {
+      errors.push(`第 ${index + 1} 页演讲者备注过短：至少需要 ${PPT_MIN_NOTES_CHARS} 字`);
+    }
+    if (!slide.title || slide.title.trim().length === 0) {
+      errors.push(`第 ${index + 1} 页缺少标题`);
+    }
+  });
+
+  if (visuals < PPT_MIN_VISUALS) {
+    errors.push(`PPT 真图不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张 chart 或内联 SVG image`);
+  }
+  if (dataLikeSubject && charts < 3) {
+    errors.push(`数据型课题图表不足：当前 ${charts} 个 chart，至少需要 3 个真实图表`);
+  }
+  if (placeholderCount > 0) {
+    errors.push(`发现 ${placeholderCount} 处“建议配图/待补充”等施工占位语，请改成真实内容`);
+  }
 }
 
 /**
