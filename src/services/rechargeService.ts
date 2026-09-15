@@ -154,6 +154,11 @@ function toRechargeRequest(row: {
 
 /**
  * 管理员：列出充值请求（默认 pending，≤50）。
+ *
+ * ⚠️ 后端 `admin_list_recharge` 是 `returns table (id uuid, ...)` 的 SECURITY DEFINER RPC。
+ * PL/pgSQL 会把返回列名声明成同名变量，函数体里**任何**裸 `id` 都会和 `profiles.id`
+ * 冲突并抛 `column reference "id" is ambiguous` (42702)。
+ * 改动 SQL（见 `0042_fix_admin_rpc_id_ambiguity.sql`）时必须用表别名限定，如 `pr.id`。
  */
 export async function listRequests(status: 'pending' | 'approved' | 'rejected' | 'all' = 'pending'): Promise<RechargeRequest[]> {
   if (isMockMode()) {

@@ -193,6 +193,12 @@ export async function adjustCredits(userId: string, delta: number, memo: string)
 /**
  * 搜索用户（用于挑人加积分）。
  *
+ * ⚠️ 后端 `admin_list_users` 是 `returns table (id uuid, ...)` 的 SECURITY DEFINER RPC。
+ * PL/pgSQL 会把返回列名声明成同名变量，所以该函数体里**任何**裸 `id` 都会和
+ * `profiles.id` 冲突并抛 `column reference "id" is ambiguous` (42702)。
+ * 改动 SQL（见 `0042_fix_admin_rpc_id_ambiguity.sql`）时，管理员身份校验必须写成
+ * `public.profiles pr where pr.id = auth.uid() and pr.role = 'admin'`，不要去掉表别名。
+ *
  * @param q 昵称关键词。
  * @param offset 偏移量。
  * @param limit 每页条数。
