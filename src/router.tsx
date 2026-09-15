@@ -44,6 +44,12 @@ const PracticeRunPage = lazy(() => import('@/pages/PracticeRunPage').then((m) =>
 const PracticeCreatePage = lazy(() => import('@/pages/PracticeCreatePage'));
 const PracticeManagePage = lazy(() => import('@/pages/PracticeManagePage').then((m) => ({ default: m.PracticeManagePage })));
 
+// 组卷（T11）：学生免登录作答（公开）/ 教师创建 / 教师管理 / 题库
+const ExamPaperRunPage = lazy(() => import('@/pages/ExamPaperRunPage').then((m) => ({ default: m.ExamPaperRunPage })));
+const ExamPaperCreatePage = lazy(() => import('@/pages/ExamPaperCreatePage'));
+const ExamPaperManagePage = lazy(() => import('@/pages/ExamPaperManagePage').then((m) => ({ default: m.ExamPaperManagePage })));
+const QuestionBankPage = lazy(() => import('@/pages/QuestionBankPage').then((m) => ({ default: m.QuestionBankPage })));
+
 /** 懒加载包裹器。 */
 function withSuspense(node: JSX.Element): JSX.Element {
   return <Suspense fallback={<InlineLoading />}>{node}</Suspense>;
@@ -105,6 +111,35 @@ const routes = [
         path: 'practice',
         element: (
           <RequireAuth>{withSuspense(<PracticeManagePage />)}</RequireAuth>
+        ),
+      },
+      // 组卷：学生免登录作答（公开，P0 硬性：不能包 RequireAuth）
+      { path: 'e/:slug', element: withSuspense(<ExamPaperRunPage />) },
+      // 组卷：教师创建（需登录）
+      {
+        path: 'exam/new',
+        element: (
+          <RequireAuth>{withSuspense(<ExamPaperCreatePage />)}</RequireAuth>
+        ),
+      },
+      // 组卷：教师管理看板（需登录）；/exam 也直接落到看板，方便口头告知
+      {
+        path: 'exam',
+        element: (
+          <RequireAuth>{withSuspense(<ExamPaperManagePage />)}</RequireAuth>
+        ),
+      },
+      {
+        path: 'exam/manage',
+        element: (
+          <RequireAuth>{withSuspense(<ExamPaperManagePage />)}</RequireAuth>
+        ),
+      },
+      // 组卷：题库（需登录）
+      {
+        path: 'exam/bank',
+        element: (
+          <RequireAuth>{withSuspense(<QuestionBankPage />)}</RequireAuth>
         ),
       },
       { path: 'square', element: withSuspense(<SquarePage />) },

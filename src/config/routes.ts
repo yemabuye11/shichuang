@@ -44,6 +44,14 @@ export const ROUTES = {
   PRACTICE_MANAGE: '/practice',
   /** 每日一练：学生免登录作答（公开）。 */
   PRACTICE_RUN: '/p',
+  /** 组卷：教师创建（需登录，T11）。 */
+  EXAM_NEW: '/exam/new',
+  /** 组卷：教师管理看板（需登录，T11）。 */
+  EXAM_MANAGE: '/exam/manage',
+  /** 组卷：题库（需登录，T11）。 */
+  EXAM_BANK: '/exam/bank',
+  /** 组卷：学生免登录作答（公开，T11）。 */
+  EXAM_RUN: '/e',
 } as const;
 
 /**
@@ -124,4 +132,34 @@ export function practiceManagePath(): string {
  */
 export function practiceRunPath(slug: string): string {
   return `${ROUTES.PRACTICE_RUN}/${encodeURIComponent(slug)}`;
+}
+
+/**
+ * 拼接组卷「创建」页路径（需登录）。
+ */
+export function examNewPath(): string {
+  return ROUTES.EXAM_NEW;
+}
+
+/**
+ * 拼接组卷「管理」页路径（需登录）。
+ */
+export function examManagePath(): string {
+  return ROUTES.EXAM_MANAGE;
+}
+
+/**
+ * 拼接组卷「题库」页路径（需登录）。
+ */
+export function examBankPath(): string {
+  return ROUTES.EXAM_BANK;
+}
+
+/**
+ * 拼接组卷「作答」页路径（公开，学生免登录）。
+ *
+ * @param slug 测验卷分享 slug。
+ */
+export function examRunPath(slug: string): string {
+  return `${ROUTES.EXAM_RUN}/${encodeURIComponent(slug)}`;
 }

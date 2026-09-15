@@ -39,6 +39,12 @@ export function TopNav({ brand, onOpenMenu }: TopNavProps): JSX.Element {
       { label: '应用广场', to: ROUTES.SQUARE, match: (p) => p.startsWith(ROUTES.SQUARE) },
       { label: '我的', to: ROUTES.ME, match: (p) => p.startsWith('/me') },
       { label: '每日一练', to: ROUTES.PRACTICE_MANAGE, match: (p) => p.startsWith(ROUTES.PRACTICE_MANAGE) },
+      {
+        label: '组卷',
+        to: ROUTES.EXAM_MANAGE,
+        // `/e/{slug}` 是学生作答页，也归到「组卷」高亮；注意用 '/e/' 避免误吃 '/exam'
+        match: (p) => p.startsWith('/exam') || p.startsWith('/e/'),
+      },
     ],
     [],
   );

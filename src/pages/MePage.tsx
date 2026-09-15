@@ -27,6 +27,7 @@ import LibraryBooksOutlinedIcon from '@mui/icons-material/LibraryBooksOutlined';
 import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import { useNavigate } from 'react-router-dom';
 import { LedgerList } from '@/components/credit/LedgerList';
 import { RedeemCodeDialog } from '@/components/credit/RedeemCodeDialog';
@@ -358,6 +359,16 @@ export function MePage(): JSX.Element {
                 sx={{ minHeight: 48, borderRadius: 2.5, justifyContent: 'flex-start' }}
               >
                 创建每日一练
+              </Button>
+              <Button
+                variant="outlined"
+                size="large"
+                fullWidth
+                startIcon={<AssignmentOutlinedIcon />}
+                onClick={() => navigate(ROUTES.EXAM_MANAGE)}
+                sx={{ minHeight: 48, borderRadius: 2.5, justifyContent: 'flex-start' }}
+              >
+                我的组卷
               </Button>
               {isAdmin ? (
                 <Button
