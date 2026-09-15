@@ -18,41 +18,6 @@ $$;
 revoke all on function public.textbook_object_owner(text) from public;
 grant execute on function public.textbook_object_owner(text) to authenticated, service_role;
 
-drop policy if exists textbooks_select_owner on storage.objects;
-create policy textbooks_select_owner on storage.objects
-  for select to authenticated
-  using (
-    bucket_id = 'textbooks'
-    and public.textbook_object_owner(name) = (select auth.uid())
-  );
-
-drop policy if exists textbooks_insert_owner on storage.objects;
-create policy textbooks_insert_owner on storage.objects
-  for insert to authenticated
-  with check (
-    bucket_id = 'textbooks'
-    and public.textbook_object_owner(name) = (select auth.uid())
-  );
-
-drop policy if exists textbooks_update_owner on storage.objects;
-create policy textbooks_update_owner on storage.objects
-  for update to authenticated
-  using (
-    bucket_id = 'textbooks'
-    and public.textbook_object_owner(name) = (select auth.uid())
-  )
-  with check (
-    bucket_id = 'textbooks'
-    and public.textbook_object_owner(name) = (select auth.uid())
-  );
-
-drop policy if exists textbooks_delete_owner on storage.objects;
-create policy textbooks_delete_owner on storage.objects
-  for delete to authenticated
-  using (
-    bucket_id = 'textbooks'
-    and public.textbook_object_owner(name) = (select auth.uid())
-  );
-
--- 不对 storage.objects 写 COMMENT：该系统表由 Supabase Storage 管理，
--- SQL Editor 角色通常不是表 owner；注释不影响桶或 RLS 策略，故省略。
+-- 注意：当前 Supabase 项目的 SQL Editor 角色不是 storage.objects 的 owner，
+-- 因此不能在这里 DROP/CREATE POLICY。请运行本文件后，按
+-- docs/0047_textbook_storage_policies.md 在 Storage -> Policies 中创建 4 条策略。
