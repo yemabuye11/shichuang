@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -87,6 +87,9 @@ export function GeneratePage(): JSX.Element {
   // 文档类每种格式各自的预估积分（分开计费展示）。
   const [estMap, setEstMap] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
+  // estimate_cost 是网络请求；用户快速切换格式时，旧请求可能晚于新请求返回。
+  // 用序号丢弃过期结果，避免出现“已选 PPT 却显示教案 + PPT 总价”的信任事故。
+  const estimateRunRef = useRef(0);
 
   const remixId = params.get('remix') ?? '';
 
@@ -112,6 +115,7 @@ export function GeneratePage(): JSX.Element {
   // 文档类：对每种勾选格式分别预估，得到分账 map，合计为本次总消耗。
   useEffect(() => {
     let alive = true;
+    const runId = ++estimateRunRef.current;
     if (category === 'doc') {
       const types = docTypes;
       void (async () => {
@@ -125,7 +129,7 @@ export function GeneratePage(): JSX.Element {
             }
           }),
         );
-        if (!alive) return;
+        if (!alive || runId !== estimateRunRef.current) return;
         setEstMap(map);
         const sum = types.reduce((acc, t) => acc + (map[t] ?? getDocTypeCost(t)), 0);
         setEstimated(sum);
@@ -135,9 +139,9 @@ export function GeneratePage(): JSX.Element {
       void (async () => {
         try {
           const cost = await creditService.estimateCost(type);
-          if (alive) setEstimated(cost);
+          if (alive && runId === estimateRunRef.current) setEstimated(cost);
         } catch {
-          if (alive) setEstimated(getAppTypeCost(appType));
+          if (alive && runId === estimateRunRef.current) setEstimated(getAppTypeCost(appType));
         }
       })();
     }

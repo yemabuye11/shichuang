@@ -12,7 +12,7 @@
  * （构建后它们是独立 chunk，网络面板可验证导出前无相关请求）。
  */
 
-import type { ChartSpec, DocBlock, DocModel } from '@/types/doc';
+import type { ChartSpec, DocBlock, DocModel, Slide } from '@/types/doc';
 
 // ---------------------------------------------------------------------------
 // 导出选项
@@ -44,8 +44,9 @@ interface DocxNode {
 interface PptxSlide {
   index: number;
   title: string;
-  bullets: string[];
+  body: readonly DocBlock[];
   notes?: string;
+  layout?: Slide['layout'];
 }
 
 /** 从单个块抽取纯文本（供映射）。 */
@@ -140,10 +141,9 @@ function toPptxSlides(model: DocModel): readonly PptxSlide[] {
   return model.slides.map((s) => ({
     index: s.index,
     title: s.title,
-    bullets: s.body
-      .flatMap((b) => (b.type === 'list' ? (b.items ?? []) : [blockText(b)]))
-      .filter((t) => t.trim().length > 0),
+    body: s.body,
     notes: s.notes,
+    layout: s.layout,
   }));
 }
 
@@ -153,38 +153,28 @@ function toPptxSlides(model: DocModel): readonly PptxSlide[] {
  */
 function blocksToSlides(model: DocModel): readonly PptxSlide[] {
   const slides: PptxSlide[] = [];
-  let cur: { title: string; bullets: string[] } | null = null;
+  let cur: { title: string; body: DocBlock[] } | null = null;
   const flush = (): void => {
-    if (cur) slides.push({ index: slides.length, title: cur.title, bullets: cur.bullets });
+    if (cur) slides.push({ index: slides.length, title: cur.title, body: cur.body });
   };
 
   for (const b of model.blocks ?? []) {
     if (b.type === 'heading') {
       flush();
-      cur = { title: b.text ?? '（节）', bullets: [] };
-    } else if (b.type === 'list') {
-      if (!cur) cur = { title: model.meta?.title ?? '要点', bullets: [] };
-      for (const it of b.items ?? []) cur.bullets.push(it);
-    } else if (b.type === 'table') {
-      if (!cur) cur = { title: model.meta?.title ?? '表格', bullets: [] };
-      const head = (b.header ?? []).join(' / ');
-      if (head) cur.bullets.push(head);
-      for (const r of b.rows ?? []) cur.bullets.push(r.join(' | '));
-    } else if (b.type === 'image') {
-      if (!cur) cur = { title: model.meta?.title ?? '图', bullets: [] };
-      cur.bullets.push(`[图] ${b.caption ?? ''}`.trim());
+      cur = { title: b.text ?? '（节）', body: [] };
     } else {
-      const t = blockText(b);
-      if (t) {
-        if (!cur) cur = { title: model.meta?.title ?? '内容', bullets: [] };
-        cur.bullets.push(t);
-      }
+      if (!cur) cur = { title: model.meta?.title ?? '内容', body: [] };
+      cur.body.push(b);
     }
   }
   flush();
 
   if (slides.length === 0) {
-    slides.push({ index: 0, title: model.meta?.title ?? '文档', bullets: ['（无正文要点）'] });
+    slides.push({
+      index: 0,
+      title: model.meta?.title ?? '文档',
+      body: [{ id: 'empty', type: 'paragraph', text: '（无正文要点）' }],
+    });
   }
   return slides;
 }
@@ -211,6 +201,150 @@ function triggerDownload(blob: Blob, fileName: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+const PPT = { width: 13.333, height: 7.5, accent: '2F6BFF', ink: '1B1F27', sub: '64748B' } as const;
+
+/** 把 data URI 转成 pptxgenjs 可稳定识别的 base64 data。 */
+function toPptxDataUri(src: string): string | null {
+  if (!src.startsWith('data:')) return null;
+  const comma = src.indexOf(',');
+  if (comma < 0) return null;
+  const header = src.slice(0, comma);
+  const payload = src.slice(comma + 1);
+  if (/;base64/i.test(header)) return src.replace(/^data:/i, '');
+  try {
+    const decoded = decodeURIComponent(payload);
+    const bytes = new TextEncoder().encode(decoded);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return `${header.replace(/^data:/i, '')};base64,${btoa(binary)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 用可编辑的 PowerPoint 原生图表承载结构化 chart 块。 */
+function addChartToSlide(slide: any, block: DocBlock, x: number, y: number, w: number, h: number): boolean {
+  const spec = block.chart;
+  if (!spec) return false;
+  const points = (spec.points ?? []).filter((p) => Array.isArray(p) && p.length >= 2) as readonly (readonly number[])[];
+  const isBar = spec.kind === 'bar';
+  const labels = isBar
+    ? (spec.categories ?? []).map(String).slice(0, 16)
+    : points.slice(0, 24).map((p) => String(p[0]));
+  const values = isBar
+    ? (spec.values ?? []).map(Number).slice(0, labels.length)
+    : points.slice(0, labels.length).map((p) => Number(p[1]));
+  if (labels.length === 0 || values.length === 0 || values.some((v) => !Number.isFinite(v))) return false;
+
+  slide.addChart(isBar ? 'bar' : 'line', [{ name: spec.title ?? spec.expression ?? '数据', labels, values }], {
+    x,
+    y,
+    w,
+    h,
+    catAxisLabelFontFace: 'Aptos',
+    catAxisLabelFontSize: 11,
+    catAxisLabelColor: PPT.sub,
+    valAxisLabelFontFace: 'Aptos',
+    valAxisLabelFontSize: 11,
+    valAxisLabelColor: PPT.sub,
+    valAxisMinVal: isBar ? 0 : undefined,
+    showLegend: false,
+    showTitle: Boolean(spec.title || spec.expression),
+    title: spec.title ?? spec.expression,
+    showValue: isBar,
+    chartColors: [PPT.accent],
+    showCatName: false,
+    showValAxisTitle: Boolean(spec.yLabel),
+    valAxisTitle: spec.yLabel,
+    catAxisTitle: spec.xLabel,
+    showBorder: false,
+  });
+  if (block.caption) {
+    slide.addText(block.caption, {
+      x,
+      y: y + h - 0.28,
+      w,
+      h: 0.25,
+      fontSize: 10,
+      color: PPT.sub,
+      italic: true,
+      align: 'center',
+      margin: 0,
+      fit: 'shrink',
+    });
+  }
+  return true;
+}
+
+/** 把内联 SVG / 图片块嵌入 PPTX；外链图片不写入文件，避免离线失效。 */
+function addImageToSlide(slide: any, block: DocBlock, x: number, y: number, w: number, h: number): boolean {
+  const data = block.src ? toPptxDataUri(block.src) : null;
+  if (!data) return false;
+  slide.addImage({ data, x, y, w, h, sizing: { type: 'contain', w, h }, altText: block.caption ?? '教学示意图' });
+  if (block.caption) {
+    slide.addText(block.caption, {
+      x,
+      y: y + h - 0.28,
+      w,
+      h: 0.25,
+      fontSize: 10,
+      color: PPT.sub,
+      italic: true,
+      align: 'center',
+      margin: 0,
+      fit: 'shrink',
+    });
+  }
+  return true;
+}
+
+function blockToSlideText(block: DocBlock): string {
+  if (block.type === 'list') return (block.items ?? []).map((item) => `• ${item}`).join('\n');
+  if (block.type === 'table') {
+    const rows = [block.header ?? [], ...(block.rows ?? [])];
+    return rows.filter((row) => row.length > 0).map((row) => row.join('  |  ')).join('\n');
+  }
+  if (block.type === 'callout') return `提示：${block.text ?? block.caption ?? ''}`;
+  if (block.type === 'image') return block.caption ? `图示：${block.caption}` : '';
+  if (block.type === 'chart') return block.caption ? `图表：${block.caption}` : chartToText(block.chart);
+  return block.text ?? '';
+}
+
+/** 根据 slide.layout 组织文字和视觉块，避免所有页面退化成同一套项目符号。 */
+function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layout']): void {
+  const visuals = body.filter((b) => b.type === 'chart' || (b.type === 'image' && Boolean(b.src)));
+  const text = body.filter((b) => b.type !== 'chart' && b.type !== 'image');
+  const textValue = text.map(blockToSlideText).filter(Boolean).join('\n\n');
+
+  if (layout === 'two_col') {
+    const midpoint = Math.ceil(body.length / 2);
+    const left = body.slice(0, midpoint).map(blockToSlideText).filter(Boolean).join('\n\n');
+    const right = body.slice(midpoint).map(blockToSlideText).filter(Boolean).join('\n\n');
+    for (const [value, x] of [[left, 0.65], [right, 6.85]] as const) {
+      if (!value) continue;
+      slide.addShape('roundRect', { x, y: 1.35, w: 5.8, h: 5.35, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'E2E8F0', pt: 1 } });
+      slide.addText(value, { x: x + 0.25, y: 1.6, w: 5.3, h: 4.85, fontSize: 16, color: PPT.ink, breakLine: false, fit: 'shrink', valign: 'top', margin: 0.04, paraSpaceAfterPt: 9 });
+    }
+    return;
+  }
+
+  if (visuals.length > 0) {
+    if (textValue) {
+      slide.addShape('roundRect', { x: 0.65, y: 1.35, w: 5.55, h: 5.35, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'E2E8F0', pt: 1 } });
+      slide.addText(textValue, { x: 0.95, y: 1.65, w: 4.95, h: 4.75, fontSize: 16, color: PPT.ink, fit: 'shrink', valign: 'top', margin: 0.04, paraSpaceAfterPt: 9 });
+    }
+    const visual = visuals[0];
+    const ok = visual.type === 'chart'
+      ? addChartToSlide(slide, visual, 6.45, 1.45, 6.25, 4.95)
+      : addImageToSlide(slide, visual, 6.45, 1.45, 6.25, 4.95);
+    if (!ok && !textValue) slide.addText(blockToSlideText(visual), { x: 0.8, y: 1.5, w: 11.8, h: 4.5, fontSize: 18, color: PPT.ink, fit: 'shrink' });
+    return;
+  }
+
+  slide.addShape('roundRect', { x: 0.65, y: 1.35, w: 12.05, h: 5.35, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'E2E8F0', pt: 1 } });
+  slide.addText(textValue || '本页暂无正文内容', { x: 0.95, y: 1.7, w: 11.45, h: 4.7, fontSize: 18, color: textValue ? PPT.ink : '94A3B8', italic: !textValue, fit: 'shrink', valign: 'top', margin: 0.04, paraSpaceAfterPt: 10 });
+}
+
 // ---------------------------------------------------------------------------
 // 导出实现
 // ---------------------------------------------------------------------------
@@ -228,6 +362,8 @@ function triggerDownload(blob: Blob, fileName: string): void {
 export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Promise<void> {
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  pptx.theme = { headFontFace: 'Aptos Display', bodyFontFace: 'Aptos' };
   pptx.author = '师创';
   pptx.company = '师创';
   pptx.title = model.meta?.title ?? '师创文档';
@@ -242,52 +378,60 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
     baseSlides.unshift({
       index: 0,
       title: `3D 课件：${model.scene.title ?? '三维教学模型'}`,
-      bullets: [
-        ...(model.scene.annotations && model.scene.annotations.length > 0
-          ? (model.scene.annotations as string[])
-          : ['可旋转 / 拆解 / 标注的三维教学模型']),
-        '（本页为静态预览，建议在网页版交互查看）',
-      ],
+      body: [{
+        id: 'scene-summary',
+        type: 'list',
+        items: [
+          ...(model.scene.annotations && model.scene.annotations.length > 0
+            ? (model.scene.annotations as string[])
+            : ['可旋转 / 拆解 / 标注的三维教学模型']),
+          '（本页为静态预览，建议在网页版交互查看）',
+        ],
+      }],
       notes: `建议用网页版查看 3D：${opts.renderUrl ?? window.location.origin}`,
+      layout: 'section',
     });
   }
 
   for (const s of baseSlides) {
     const slide = pptx.addSlide();
+    const isCover = s.layout === 'title' || s.index === 0;
+    const isSection = s.layout === 'section';
+    slide.background = { color: isCover ? PPT.accent : 'F7F9FC' };
+
+    if (!isCover) {
+      slide.addShape('rect', { x: 0, y: 0, w: PPT.width, h: 0.16, fill: { color: PPT.accent }, line: { color: PPT.accent } });
+      slide.addShape('rect', { x: 0, y: 0.16, w: PPT.width, h: 0.04, fill: { color: 'BFD1FF' }, line: { color: 'BFD1FF' } });
+    }
+
     slide.addText(s.title || '（无标题）', {
-      x: 0.4,
-      y: 0.3,
-      w: 9.2,
-      h: 0.7,
-      fontSize: 28,
+      x: isCover ? 0.9 : 0.65,
+      y: isCover ? 2.25 : 0.42,
+      w: isCover ? 11.55 : 11.8,
+      h: isCover ? 1.2 : 0.62,
+      fontSize: isCover ? 32 : 25,
       bold: true,
-      color: '1B1F27',
+      color: isCover ? 'FFFFFF' : PPT.ink,
+      align: isCover ? 'center' : 'left',
+      valign: 'middle',
+      fit: 'shrink',
+      margin: 0,
     });
 
-    if (s.bullets.length > 0) {
-      slide.addText(
-        s.bullets.map((b) => ({ text: b })),
-        {
-          x: 0.5,
-          y: 1.1,
-          w: 9.0,
-          h: 4.1,
-          fontSize: 18,
-          bullet: { indent: 20 },
-          color: '333333',
-          lineSpacingMultiple: 1.2,
-        },
-      );
+    if (isCover) {
+      const subtitle = [model.meta?.subject, model.meta?.grade, model.meta?.textbook, model.meta?.duration]
+        .filter(Boolean)
+        .join('  ·  ');
+      if (subtitle) slide.addText(subtitle, { x: 1.2, y: 3.75, w: 10.9, h: 0.4, fontSize: 16, color: 'E6EEFF', align: 'center', margin: 0 });
+      slide.addShape('line', { x: 5.1, y: 4.45, w: 3.1, h: 0, line: { color: 'BFD1FF', pt: 1.5 } });
+      slide.addText('师创 · 请教师核对后使用', { x: 1.2, y: 6.2, w: 10.9, h: 0.3, fontSize: 11, color: 'DCE7FF', align: 'center', margin: 0 });
+    } else if (isSection) {
+      slide.addShape('roundRect', { x: 1.1, y: 2.05, w: 11.1, h: 2.7, rectRadius: 0.12, fill: { color: 'EAF0FF' }, line: { color: 'BFD1FF', pt: 1 } });
+      addSlideBody(slide, s.body, 'two_col');
     } else {
-      slide.addText('（本页无正文要点）', {
-        x: 0.5,
-        y: 1.2,
-        w: 9.0,
-        h: 1,
-        fontSize: 16,
-        italic: true,
-        color: '999999',
-      });
+      addSlideBody(slide, s.body, s.layout ?? 'content');
+      slide.addText(`师创  ·  ${s.index + 1}`, { x: 11.3, y: 7.12, w: 1.35, h: 0.2, fontSize: 9, color: PPT.sub, align: 'right', margin: 0 });
+      slide.addText('请教师核对', { x: 0.65, y: 7.12, w: 1.5, h: 0.2, fontSize: 9, color: PPT.sub, margin: 0 });
     }
 
     if (s.notes) slide.addNotes(s.notes);
