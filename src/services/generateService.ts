@@ -1,5 +1,4 @@
-import { getSupabase, functionsBaseUrl } from './supabaseClient';
-import { env } from '@/config/env';
+import { getSupabase } from './supabaseClient';
 import { AppError } from './http/errors';
 import { mockGenerate } from './mock/mockGenerate';
 import { isMockMode } from '@/config/env';
@@ -193,34 +192,32 @@ async function runRemote(
   let token = session?.access_token;
   if (!token) throw new AppError('UNAUTHORIZED', '登录状态已失效，请重新登录');
 
-  const request = async (accessToken: string): Promise<Response> =>
-    fetch(`${functionsBaseUrl()}/generate`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        // 与 supabase-js functions.invoke 保持一致；部分网关配置会要求 anon key
-        // 才把 Authorization 头转发给 verify_jwt=true 的 Edge Function。
-        apikey: env.supabaseAnonKey,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify(req),
+  // 使用 Supabase 官方 FunctionsClient：它会在专用 fetch 中注入 apikey 和当前 JWT，
+  // 也能保留 text/event-stream 响应体供前端逐帧解析。
+  sb.functions.setAuth(token);
+  const invoke = () =>
+    sb.functions.invoke<unknown>('generate', {
+      body: req,
+      headers: { Accept: 'text/event-stream' },
       signal: controller.signal,
     });
 
-  let res = await request(token);
+  let result = await invoke();
   // 只对鉴权失败重试一次。401 在预扣积分之前返回，因此不会造成重复扣费；
   // 其他业务错误必须原样交给页面，避免重复提交生成任务。
-  if (res.status === 401) {
+  if (result.response?.status === 401) {
     const refreshed = await sb.auth.refreshSession();
     const refreshedToken = refreshed.data.session?.access_token;
     if (refreshedToken && refreshedToken !== token) {
       token = refreshedToken;
-      res = await request(token);
+      sb.functions.setAuth(token);
+      result = await invoke();
     }
   }
 
-  if (!res.ok || !res.body) {
+  if (result.error || !result.data) {
+    const res = result.response;
+    if (!res) throw result.error ?? new AppError('NETWORK', '生成服务暂时不可用');
     const payload = await safeJson(res);
     const code = (payload?.code as GenerateErrorCode) ?? (res.status === 401 ? 'UNAUTHORIZED' : 'MODEL_ERROR');
     emitError(handlers, {
@@ -233,6 +230,8 @@ async function runRemote(
     return;
   }
 
+  const res = result.data as Response;
+  if (!res.body) throw new AppError('NETWORK', '生成服务没有返回有效内容');
   await parseSse(res.body, handlers.onEvent);
 }
 
