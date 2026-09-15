@@ -142,10 +142,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     async start(controller) {
       let heartbeatTimer: number | undefined;
       let settled = false;
+      let currentStage = 'starting';
       /** 当前任务 ID（预扣后设置，供失败时退还）。 */
       let currentJobId: string | null = null;
 
       const send = (event: string, data: unknown): void => {
+        if (event === 'stage' && data && typeof data === 'object' && 'stage' in data) {
+          currentStage = String((data as { stage?: unknown }).stage ?? currentStage);
+        }
         try {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
@@ -182,6 +186,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
           refunded,
           creditsBalance: balance,
           retryable: e.retryable,
+          jobId: jobId ?? undefined,
+          stage: currentStage,
         });
         if (!settled) {
           settled = true;
@@ -262,7 +268,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
           // 单一 generation_jobs（占位 app_id，结算作用在首个真实 appId 上）。
           const firstAppId = crypto.randomUUID();
-          await sb.from('generation_jobs').insert({
+          const jobInsert = await sb.from('generation_jobs').insert({
             id: jobId,
             user_id: caller.userId,
             app_id: firstAppId,
@@ -272,6 +278,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
             reserved_credits: totalCost,
             idempotency_key: idem,
           });
+          if (jobInsert.error) {
+            throw new AppError('STORE_FAILED', `生成任务创建失败：${jobInsert.error.message}`);
+          }
 
           // ---- 4. 进度阶段事件（一次性发出，保持前端进度条工作）----
           send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
@@ -324,7 +333,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             perCost: number,
           ): Promise<{ tokensIn: number; tokensOut: number; costCny: number; ms: number }> {
             // 该格式的 apps 草稿行（与单格式逻辑一致：doc_type / credits_cost / 其他字段）。
-            await sb.from('apps').insert({
+            const appInsert = await sb.from('apps').insert({
               id: appId,
               author_id: caller.userId,
               title: prompt.slice(0, 40),
@@ -342,6 +351,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
               html_status: 'pending',
               credits_cost: perCost,
             });
+            if (appInsert.error) {
+              throw new AppError('STORE_FAILED', `文档草稿保存失败：${appInsert.error.message}`);
+            }
 
             // ---- 4. 拼装本格式提示词（含模板 / 参考课例注入）----
             const composed = await composeDoc({
@@ -487,7 +499,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             void shadowStore.putDocJson(appId, finalModel.version, json).catch(() => undefined);
 
             const title = finalModel.meta?.title || prompt.slice(0, 30);
-            await sb
+            const appUpdate = await sb
               .from('apps')
               .update({
                 title,
@@ -508,6 +520,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 cover_seed: putHtml.sha256.slice(0, 16),
               })
               .eq('id', appId);
+            if (appUpdate.error) {
+              throw new AppError('STORE_FAILED', `文档结果保存失败：${appUpdate.error.message}`);
+            }
 
             // ---- 生成即沉淀（BR-014/015）：写入 doc_library，为后续 Skill 提炼降本备料 ----
             // T09：按入参 publishToLibrary 决定是否公开；公开时写入作者昵称与标题快照，供内容市场展示。
@@ -655,7 +670,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         currentJobId = jobId;
 
         // 创建 job + app 草稿
-        await sb.from('generation_jobs').insert({
+        const jobInsert = await sb.from('generation_jobs').insert({
           id: jobId,
           user_id: caller.userId,
           app_id: appId,
@@ -665,7 +680,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
           reserved_credits: creditCost,
           idempotency_key: idem,
         });
-        await sb.from('apps').insert({
+        if (jobInsert.error) {
+          throw new AppError('STORE_FAILED', `生成任务创建失败：${jobInsert.error.message}`);
+        }
+        const appInsert = await sb.from('apps').insert({
           id: appId,
           author_id: caller.userId,
           title: prompt.slice(0, 40),
@@ -680,6 +698,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
           html_status: 'pending',
           credits_cost: creditCost,
         });
+        if (appInsert.error) {
+          throw new AppError('STORE_FAILED', `应用草稿保存失败：${appInsert.error.message}`);
+        }
 
         // ---- 4. 拼装提示词 ----
         send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
@@ -834,7 +855,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         void shadowStore.putAppHtml(appId, 1, html).catch(() => undefined);
 
         const title = extractTitle(html) || prompt.slice(0, 30);
-        await sb
+        const appUpdate = await sb
           .from('apps')
           .update({
             title,
@@ -850,6 +871,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
             cover_seed: put.sha256.slice(0, 16),
           })
           .eq('id', appId);
+        if (appUpdate.error) {
+          throw new AppError('STORE_FAILED', `应用结果保存失败：${appUpdate.error.message}`);
+        }
 
         await sb.rpc('settle_generation', {
           p_job_id: jobId,

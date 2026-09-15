@@ -1,0 +1,45 @@
+# 2026-09-15 任务日志：内测前 P0 闭环与 GitHub 发布准备
+
+- 日期：2026-09-15
+- 角色：工程师 / QA / 运维
+- 任务：修复生成页教材绑定空状态和创建入口，增强教材上传与失败可诊断性，完成内测前静态验证并准备发布。
+- 完成内容：
+  - 生成页保留为默认入口，应用广场继续作为独立路由。
+  - 教材绑定在空列表或筛选无结果时提供“新建教材版本 / 上传电子教材”入口。
+  - 新建表单支持年份、年级、学科、出版社、版本、章节，并限制教材文件类型和 20MB 大小。
+  - Mock 模式保存教材版本和待核对知识；真实模式写入私有 `textbooks` Storage 桶并按账号隔离。
+  - 生成错误增加任务编号和失败阶段；生成关键存储写入失败时进入退款路径，不再静默忽略。
+  - 补充剩余功能 PRD、交付分工、能力升级计划和项目现状文档。
+- 修改的文件：
+  - `AGENTS.md`
+  - `src/components/generate/TextbookCascade.tsx`
+  - `src/components/progress/GenerateErrorPanel.tsx`
+  - `src/hooks/useTextbook.ts`
+  - `src/pages/GeneratePage.tsx`
+  - `src/services/mock/mockStore.ts`
+  - `src/services/textbookService.ts`
+  - `src/types/api.ts`
+  - `supabase/functions/generate/index.ts`
+  - `supabase/migrations/0047_textbook_storage.sql`
+  - `docs/本次要跑的SQL清单.md`
+  - `docs/PROJECT_STATUS_REPORT.md`
+  - `docs/PRD_REMAINING.md`
+  - `docs/DELIVERY_WORK_ALLOCATION.md`
+  - `docs/PLAN_能力提升练习.md`
+  - `docs/其他AI制作前先读.md`
+  - `docs/logs/2026-09-15-p0-implementation.md`
+- 验证：
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - 本地开发服务器已启动于 `http://127.0.0.1:5173/`，已检查登录页可加载。
+  - 尚未完成真实 Supabase 账号生成、Storage 回读和失败退款联调。
+- 遗留问题：
+  - 需要在目标 Supabase 执行 `0047_textbook_storage.sql`，否则线上教材上传桶不存在。
+  - 真实教案生成仍依赖线上迁移、模型 Secrets、活动 prompt 和积分配置，当前没有真实环境验收证据。
+  - 十份低质量文档没有明确 ID、账号和环境，未执行删除，避免误伤真实数据。
+- 下一步：
+  - 运维：执行并验证 Supabase 迁移，部署相关 Edge Function。
+  - QA：用真实测试账号完成登录、教材创建、教案生成、失败退款、编辑、导出和分享回归。
+  - 产品经理：提供十份文档的精确清单后，再做定向删除。
+  - 运维/交付总监：确认 GitHub Actions、Pages 和线上 smoke 结果后放行内测。

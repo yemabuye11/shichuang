@@ -79,6 +79,11 @@ export function GenerateErrorPanel({
                   : '本次未扣除积分，可以放心重试。'}
               </Typography>
             ) : null}
+            {error?.jobId ? (
+              <Typography sx={{ fontSize: 12, color: 'text.disabled', mt: 0.75 }}>
+                任务编号：{error.jobId}{error.stage ? ` · 失败阶段：${error.stage}` : ''}
+              </Typography>
+            ) : null}
           </Box>
         </Stack>
 

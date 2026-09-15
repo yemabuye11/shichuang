@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TextbookCascadeOptions, TextbookVersion } from '@/types/doc';
+import type { CreateTextbookVersionInput } from '@/services/textbookService';
 import * as textbookService from '@/services/textbookService';
 
 /**
@@ -13,6 +14,7 @@ export function useTextbook(): {
   options: TextbookCascadeOptions;
   loading: boolean;
   refresh: () => Promise<void>;
+  createVersion: (input: CreateTextbookVersionInput) => Promise<TextbookVersion>;
   deposit: (docId: string | null, versionId: string, section: string, content: string) => Promise<unknown>;
 } {
   const [versions, setVersions] = useState<TextbookVersion[]>([]);
@@ -49,7 +51,13 @@ export function useTextbook(): {
     [],
   );
 
-  return { versions, options, loading, refresh, deposit };
+  const createVersion = useCallback(async (input: CreateTextbookVersionInput): Promise<TextbookVersion> => {
+    const version = await textbookService.createTextbookVersion(input);
+    await refresh();
+    return version;
+  }, [refresh]);
+
+  return { versions, options, loading, refresh, createVersion, deposit };
 }
 
 export default useTextbook;

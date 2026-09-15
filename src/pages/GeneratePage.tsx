@@ -64,7 +64,7 @@ export function GeneratePage(): JSX.Element {
   const { user, brand } = useAuth();
   const toast = useToast();
   const { start } = useGenerate();
-  const { versions, options } = useTextbook();
+  const { versions, options, createVersion, loading: textbookLoading } = useTextbook();
   const [params] = useSearchParams();
   const location = useLocation();
 
@@ -345,6 +345,12 @@ export function GeneratePage(): JSX.Element {
               onSelectVersion={setTextbookVersionId}
               chapter={chapter}
               onChapterChange={setChapter}
+              onCreateVersion={async (input) => {
+                const created = await createVersion(input);
+                toast.success('教材版本已创建并绑定');
+                return created;
+              }}
+              loading={textbookLoading}
             />
           </>
         ) : (

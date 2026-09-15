@@ -110,6 +110,10 @@ export interface ErrorEvent {
   creditsBalance: number;
   /** 是否可重试。 */
   retryable: boolean;
+  /** 服务端生成任务 ID（有预扣后失败时用于客服定位）。 */
+  jobId?: string;
+  /** 发生失败的阶段。 */
+  stage?: string;
 }
 
 /** 生成错误码（与 ARCHITECTURE.md §3.4 错误码表一致）。 */

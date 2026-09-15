@@ -20,6 +20,7 @@
 | 8 | `0043_doc_prompt_quality.sql` | 教案/课件的质量下限 | 见下方验证 SQL |
 | 9 | `0044_credit_cost_quality_v2.sql` | 新的积分价格 | 见下方验证 SQL |
 | 10 | `0046_ppt_2d_prompt_visual.sql` | 让课件**真的带图** | 见下方验证 SQL |
+| 11 | `0047_textbook_storage.sql` | 教材电子版私有存储桶与按账号隔离的 Storage 策略 | `select id, public from storage.buckets where id = 'textbooks';` 应返回 `false` |
 
 > ⚠️ **0045 不在这张表里**，它要改邮箱后单独跑，见第三节。
 

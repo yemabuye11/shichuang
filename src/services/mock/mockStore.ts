@@ -573,6 +573,8 @@ export function depositTextbookKnowledge(
   versionId: string,
   section: string,
   content: string,
+  source: 'ai' | 'teacher' | 'upload' = 'teacher',
+  status: 'pending' | 'verified' = 'verified',
 ): TextbookKnowledge {
   const now = new Date().toISOString();
   const k: TextbookKnowledge = {
@@ -580,9 +582,9 @@ export function depositTextbookKnowledge(
     textbookVersionId: versionId,
     section,
     content,
-    status: 'verified',
-    verifiedBy: state.profile?.id ?? 'mock-user',
-    source: 'teacher',
+    status,
+    verifiedBy: status === 'verified' ? (state.profile?.id ?? 'mock-user') : null,
+    source,
     createdAt: now,
   };
   state.textbookKnowledge = [k, ...state.textbookKnowledge];
