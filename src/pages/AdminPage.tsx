@@ -18,6 +18,7 @@ import { AppTypeCreditsPanel } from '@/components/admin/AppTypeCreditsPanel';
 import { PracticeSettingsPanel } from '@/components/admin/PracticeSettingsPanel';
 import { ExamSettingsPanel } from '@/components/admin/ExamSettingsPanel';
 import { PaymentQrPanel } from '@/components/admin/PaymentQrPanel';
+import { CodePanel } from '@/components/admin/CodePanel';
 import { useToast } from '@/components/common/ToastHost';
 import { isMockMode } from '@/config/env';
 import * as adminService from '@/services/adminService';
@@ -33,6 +34,7 @@ import type { AdminStats, ReportItem } from '@/types/models';
  * - Tab「每日一练配置」：练习天数折扣等（走 system_config.practice）；
  * - Tab「组卷配置」：题型单题积分 / 阶梯折扣 / 折扣下限 / 识别积分 / 默认题量（走 system_config.exam）；
  * - Tab「收款码配置」：老师端充值页展示的收款码图片（走 system_config.payment_qr，仅展示图片，不接支付）；
+ * - Tab「兑换码」：生成 / 查看 / 作废兑换码（线下充值后发给老师，走 admin_create_codes 系列）；
  * - Tab「内容类型积分」：直接改各内容类型的单次生成积分消耗（走 admin_upsert_app_type）。
  *
  * 整个页面处于 `RequireAuth requireAdmin` 路由守卫内，非管理员看不到任何入口。
@@ -107,7 +109,7 @@ export function AdminPage(): JSX.Element {
         <Box>
           <Typography sx={{ fontSize: { xs: 21, sm: 24 }, fontWeight: 800 }}>管理员后台</Typography>
           <Typography sx={{ fontSize: 13.5, color: 'text.secondary', mt: 0.25 }}>
-            看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置 · 每日一练 · 组卷 · 收款码 · 积分单价
+            看数据 · 处理举报 · 查看用户 · 收款设置 · 待充值到账 · 公告设置 · 每日一练 · 组卷 · 收款码 · 兑换码 · 积分单价
           </Typography>
         </Box>
       </Stack>
@@ -134,6 +136,7 @@ export function AdminPage(): JSX.Element {
         <Tab label="每日一练配置" />
         <Tab label="组卷配置" />
         <Tab label="收款码配置" />
+        <Tab label="兑换码" />
         <Tab label="内容类型积分" />
       </Tabs>
 
@@ -196,6 +199,10 @@ export function AdminPage(): JSX.Element {
       ) : tab === 7 ? (
         <Box sx={{ mt: 3 }}>
           <PaymentQrPanel />
+        </Box>
+      ) : tab === 8 ? (
+        <Box sx={{ mt: 3 }}>
+          <CodePanel />
         </Box>
       ) : (
         <Box sx={{ mt: 3 }}>
