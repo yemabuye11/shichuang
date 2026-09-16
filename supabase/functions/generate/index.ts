@@ -39,7 +39,7 @@ import { assertUnderMonthlyCap, checkTokenLimit, costOf, currentPeriod } from '.
 import { getSearchAdapter } from '../_shared/search/index.ts';
 
 /** 单次生成超时（毫秒）。 */
-const MODEL_TIMEOUT_MS = 120_000;
+const MODEL_TIMEOUT_MS = 90_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
 /**
@@ -544,7 +544,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
               .update({ prompt_version: composed.promptVersion })
               .eq('id', jobId);
 
-            // ---- 5. 调模型（SSE 透传）----
+            // ---- 5. 调模型（文档类使用一次性 JSON，避免长流无 finish 卡在 70%）----
             const llmReq: LlmRequest = {
               systemPrompt: composed.systemPrompt,
               userPrompt: composed.userPrompt,
@@ -570,79 +570,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
               }
               usage = normalizeUsage(null, docJson, composed.systemPrompt + composed.userPrompt);
             } else {
-              const ctx = {
-                modelId: modelCfg?.modelId ?? 'deepseek-chat',
-                apiBase: selectedApiBase,
-                maxOutputTokens: maxOutput,
-                stream: true,
-              };
-              const built = adapter.buildRequest(llmReq, ctx);
-
-              const ac = new AbortController();
-              const timer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
-              let res: Response;
-              try {
-                res = await fetch(built.url, {
-                  method: 'POST',
-                  headers: built.headers,
-                  body: JSON.stringify(built.body),
-                  signal: ac.signal,
-                });
-              } finally {
-                clearTimeout(timer);
-              }
-
-              if (!res.ok || !res.body) {
-                const text = await res.text().catch(() => '');
-                console.error(`[generate:doc] 模型返回 ${res.status}`);
-                void text;
-                throw new AppError('MODEL_ERROR', modelErrorMessage(provider, res.status));
-              }
-
-              const reader = res.body.getReader();
-              const decoder = new TextDecoder();
-              let buffer = '';
-              const streamTimer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
-              let providerFinished = false;
-              try {
-                for (;;) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  buffer += decoder.decode(value, { stream: true });
-                  let next = nextSseFrame(buffer);
-                  while (next) {
-                    const frame = next.frame;
-                    buffer = next.rest;
-                    for (const line of frame.split('\n')) {
-                      const parsed = adapter.parseChunk(line);
-                      if (!parsed) continue;
-                      if (parsed.text) {
-                        raw += parsed.text;
-                        send('delta', { text: parsed.text });
-                        if (isCompleteJsonObject(raw)) providerFinished = true;
-                      }
-                      if (parsed.usage) usage = parsed.usage;
-                      if (parsed.finish) {
-                        providerFinished = true;
-                        break;
-                      }
-                    }
-                    if (providerFinished) break;
-                    next = nextSseFrame(buffer);
-                  }
-                  if (providerFinished) {
-                    // 某些模型网关在发送 finish/[DONE] 后仍保持连接，
-                    // 不主动结束读取会让前端永远收不到最终 done 事件。
-                    await reader.cancel().catch(() => undefined);
-                    break;
-                  }
-                }
-              } finally {
-                clearTimeout(streamTimer);
-              }
-              if (usage.promptTokens === 0) {
-                usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
-              }
+              // 文档结果是一个需要完整解析、校验和落库的 JSON。流式响应在部分
+              // 网关上可能已经返回完整内容却迟迟不发送 finish，导致页面永久停在
+              // “生成文档内容”。一次性请求把 fetch、headers 和 json() 放进同一
+              // 个 AbortController 超时范围；拿到完整结果后只发一次 delta。
+              raw = await callOnce(
+                adapter,
+                { ...llmReq, userPrompt: composed.userPrompt },
+                {
+                  modelId: modelCfg?.modelId ?? 'deepseek-chat',
+                  apiBase: selectedApiBase,
+                  maxOutputTokens: maxOutput,
+                  stream: false,
+                },
+              );
+              if (raw.trim().length > 0) send('delta', { text: raw });
+              usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
             }
 
             // ---- 6. 校验 + 重试 1 次 ----
@@ -1343,18 +1286,26 @@ async function callOnce(
   const built = adapter.buildRequest(req, ctx);
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
-  let res: Response;
   try {
-    res = await fetch(built.url, {
+    const res = await fetch(built.url, {
       method: 'POST',
       headers: built.headers,
       body: JSON.stringify(built.body),
       signal: ac.signal,
     });
+    if (!res.ok) {
+      throw new AppError('MODEL_ERROR', modelErrorMessage(adapter.provider, res.status));
+    }
+    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = json.choices?.[0]?.message?.content ?? '';
+    if (!content.trim()) throw new AppError('MODEL_ERROR', 'AI 服务未返回有效内容，本次不扣积分');
+    return content;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new AppError('TIMEOUT', 'AI 生成超过 90 秒，已停止本次任务，请缩小范围后重试');
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
-  if (!res.ok) throw new AppError('MODEL_ERROR', 'AI 服务开小差了，本次不扣积分');
-  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  return json.choices?.[0]?.message?.content ?? '';
 }
