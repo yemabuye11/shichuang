@@ -89,7 +89,7 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
     return { ok: false, errors: [`JSON 解析失败：${msg}，请输出合法 JSON`], model: null };
   }
 
-  const model = parsed as Partial<DocModel>;
+  const model = parsed as Partial<DocModel> & { version?: unknown };
   if (typeof model !== 'object' || model === null) {
     return { ok: false, errors: ['DocModel 必须是 JSON 对象'], model: null };
   }
@@ -133,10 +133,15 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
     }
   }
 
-  if (typeof model.version !== 'number') {
+  if (typeof model.version === 'string' && /^\d+(?:\.\d+){0,2}$/.test(model.version.trim())) {
+    // 部分模型会把版本写成常见的语义版本（例如 `1.0.0`）。
+    // 这不是内容质量问题，直接归一化为当前 DocModel 的数字版本，
+    // 避免为了一个无害格式差异再次调用模型并把任务拖回 70%。
+    model.version = Number.parseInt(model.version, 10) || 1;
+  } else if (typeof model.version !== 'number') {
     // 允许缺失，渲染时补 1
     if (model.version !== undefined) {
-      errors.push('字段 version 必须是数字');
+      errors.push('字段 version 必须是数字或合法语义版本');
     }
   }
 

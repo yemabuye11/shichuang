@@ -1,0 +1,23 @@
+# 2026-09-17 任务日志：修复文档生成 70% 卡住
+
+- 日期：2026-09-17
+- 角色：后端工程师 / QA / 运维
+- 任务：修复 PPT/教案生成在模型已返回完整内容后仍停留在 70% 的问题，避免重复消耗模型 token。
+- 完成内容：
+  - 文档类模型请求改为一次性 JSON 请求，单次请求统一受 90 秒 AbortController 超时保护。
+  - 修复非流式 `res.json()` 不受超时保护的问题。
+  - 文档版本字段兼容 `1.0.0` 等合法语义版本，并在本地归一化为数字版本，避免触发无意义的自修复请求。
+  - 已完成本地类型检查、Edge Function 语法检查和生产构建。
+  - 已部署 Supabase `generate` Edge Function，并推送 GitHub `main`。
+- 修改的文件：
+  - `supabase/functions/generate/index.ts`
+  - `supabase/functions/_shared/doc/validate.ts`
+  - `docs/logs/2026-09-17-generation-stall-fix.md`
+- 验证：
+  - `npm run typecheck`：通过。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - `npm run build`：通过。
+  - `npx -y supabase functions deploy generate`：部署成功。
+  - 浏览器回归已确认模型返回约 15KB、16 页、真实函数图表、例题、互动、易错点、作业和讲者备注；首次回归因旧校验器误判版本字段未进入完成页。
+- 遗留问题：需要重新部署本次版本后再做一次真实 PPT 回归；GitHub Pages 存储本身仍有 10–60 秒发布延迟，但页面会先使用本地副本。
+- 下一步：运维/QA 重新部署后只生成一次同类课件，确认进入文档查看页并验证 PPTX 导出。
