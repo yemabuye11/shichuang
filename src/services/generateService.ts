@@ -256,19 +256,34 @@ export async function parseSse(
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let sepIdx = buffer.indexOf('\n\n');
-    while (sepIdx >= 0) {
-      const frame = buffer.slice(0, sepIdx);
-      buffer = buffer.slice(sepIdx + 2);
+  const consumeFrames = (): void => {
+    // 供应商和反向代理可能使用 LF 或 CRLF；统一按空行切帧。
+    for (;;) {
+      const match = /\r?\n\r?\n/.exec(buffer);
+      if (!match || match.index === undefined) return;
+      const frame = buffer.slice(0, match.index);
+      buffer = buffer.slice(match.index + match[0].length);
       const event = parseFrame(frame);
       if (event) onEvent(event);
-      sepIdx = buffer.indexOf('\n\n');
     }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      // flush TextDecoder，避免多字节字符被留在 decoder 内；随后解析尾帧。
+      buffer += decoder.decode();
+      consumeFrames();
+      // 某些边缘代理会在最后一帧后直接关闭连接，不补充 SSE 要求的空行。
+      const tail = buffer.trim();
+      if (tail) {
+        const event = parseFrame(tail);
+        if (event) onEvent(event);
+      }
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    consumeFrames();
   }
 }
 

@@ -1,0 +1,28 @@
+# 2026-09-16 任务日志：真实 PPT 生成完成事件修复与回归
+
+- 日期：2026-09-16
+- 角色：前端工程师 / 后端工程师 / QA / 运维
+- 任务：验证真实 PPT 生成质量，修复内容已返回但生成页停在 70% 的流式收尾问题，并准备发布。
+- 完成内容：
+  - 使用真实账号发起九年级数学《二次函数的图像与性质》第 1 课时 PPT 生成测试。
+  - 确认账户余额从 100 正常预扣到 92，排除积分不足原因。
+  - 确认模型已返回完整 14 页 DocModel JSON，包含学习目标、导入、描点法、真实函数图表、例题与变式、互动、易错点、小结、分层作业和讲者备注。
+  - 修复前端 SSE 解析：支持 LF/CRLF 空行分隔，流关闭时 flush TextDecoder，并解析没有末尾空行的残留尾帧，避免 `done` 事件被吞掉。
+  - 保留此前生成任务孤儿预扣幂等退款与真实模型生成链路修复。
+- 修改的文件：
+  - `src/services/generateService.ts`
+  - `supabase/functions/generate/index.ts`
+  - `supabase/migrations/0051_orphan_generation_refund.sql`
+  - `docs/logs/2026-09-16-sse-completion-test.md`
+- 验证：
+  - `npm run typecheck` 通过。
+  - `npm run build` 通过。
+  - `node scripts/check-functions.mjs` 45/45 通过。
+  - 浏览器真实测试收到约 12.7 KB 完整 PPT JSON；页面此前卡在 70%，问题定位为完成事件收尾/状态推进未可靠完成。
+  - 未重复点击生成，避免重复扣费。
+- 遗留问题：
+  - 当前浏览器中的旧任务在页面状态重置后显示“任务已结束”，不能作为修复后的成功预览证据。
+  - GitHub Pages 发布完成后仍需重新发起一次真实 PPT，验证完成页、文档查看、PPTX 导出和余额扣除。
+- 下一步：
+  - 运维：提交并推送 GitHub，等待 Pages Actions 完成。
+  - QA：刷新线上站点后重新生成 1 份 PPT，核对 14 页、图表、讲者备注、导出和余额。

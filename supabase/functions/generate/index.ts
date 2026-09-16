@@ -122,6 +122,24 @@ function modelErrorMessage(provider: string, status: number): string {
   return `AI 服务暂时异常（${source}，HTTP ${status}），本次不扣积分`;
 }
 
+/** 任务行尚未写入时的兜底退款（例如幂等键冲突）。 */
+async function refundOrphanReserve(opts: {
+  userId: string;
+  jobId: string;
+  amount: number;
+  errorCode: string;
+  errorMessage: string;
+}): Promise<void> {
+  const { error } = await adminClient().rpc('refund_orphan_generation', {
+    p_user_id: opts.userId,
+    p_job_id: opts.jobId,
+    p_amount: opts.amount,
+    p_error_code: opts.errorCode,
+    p_error_message: opts.errorMessage,
+  });
+  if (error) console.error('[generate] 孤儿预扣退款失败：', error.message);
+}
+
 /**
  * 判断需求是否超出「一次一课时」的范围。
  *
@@ -329,6 +347,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
             idempotency_key: idem,
           });
           if (jobInsert.error) {
+            await refundOrphanReserve({
+              userId: caller.userId,
+              jobId,
+              amount: totalCost,
+              errorCode: 'STORE_FAILED',
+              errorMessage: `生成任务创建失败：${jobInsert.error.message}`,
+            });
             throw new AppError('STORE_FAILED', `生成任务创建失败：${jobInsert.error.message}`);
           }
 
@@ -741,6 +766,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
           idempotency_key: idem,
         });
         if (jobInsert.error) {
+          await refundOrphanReserve({
+            userId: caller.userId,
+            jobId,
+            amount: creditCost,
+            errorCode: 'STORE_FAILED',
+            errorMessage: `生成任务创建失败：${jobInsert.error.message}`,
+          });
           throw new AppError('STORE_FAILED', `生成任务创建失败：${jobInsert.error.message}`);
         }
         const appInsert = await sb.from('apps').insert({
