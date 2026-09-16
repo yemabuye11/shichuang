@@ -12,6 +12,9 @@
   - 定位第二次回归被旧 `running` 任务拦截的问题：上一次异常中断后任务未释放并发锁。
   - 在 `generate` Edge Function 增加孤儿任务回收：仅处理超过 5 分钟的 `running` 任务，复用幂等退款 RPC 后释放锁，不影响正常生成。
   - 已将该 Edge Function 部署到 Supabase。
+  - 线上新任务实际收到约 14.8 KB 的完整 14 页 DocModel，但因模型上游发送 finish/[DONE] 后连接未立即关闭，Edge Function 继续等待，前端停在 63%。
+  - 修复 `generate` Edge Function：识别模型 finish 后立即取消上游 reader，继续校验、落库并发送最终 `done` 事件；已重新部署到 Supabase。
+  - 修复前端取消生成状态：Abort 后立即进入 `cancelled`，避免取消按钮仍显示 63% 生成中。
 - 修改的文件：
   - `src/services/generateService.ts`
   - `supabase/functions/generate/index.ts`
@@ -28,11 +31,12 @@
   - 已提交并推送 GitHub：`f97f2f1 fix: recover stale generation jobs`。
   - 线上页面实测显示旧任务失败原因为“你还有一个应用在生成中”，余额显示 `92`，并明确提示本次未扣积分。
   - 尝试点击“重试一次”进行修复后真实回归时，被浏览器安全审核拦截，未能触发新的积分消费请求。
+  - 最新修改再次通过 `npm run typecheck`、`npm run build`、`node scripts/check-functions.mjs`；Supabase `generate` 已重新部署。
 - 遗留问题：
   - 当前浏览器中的旧任务在页面状态重置后显示“任务已结束”，不能作为修复后的成功预览证据。
   - GitHub Pages 的本次 Actions 完成状态尚未通过当前环境的 GitHub API 核实。
-  - 仍需在浏览器允许“重试一次”后重新发起一次真实 PPT，验证完成页、文档查看、PPTX 导出和余额扣除。
+  - 仍需前端新版本发布后重新发起一次真实 PPT，验证完成页、文档查看、PPTX 导出和余额扣除。
 - 下一步：
-  - 运维：确认 GitHub Pages Actions 已部署提交 `f97f2f1`。
-  - QA：在浏览器允许生成动作后重新生成 1 份 PPT，核对 14 页、图表、讲者备注、导出和余额。
+  - 运维：提交并推送本次 finish 收尾和取消状态修复，确认 GitHub Pages Actions 完成。
+  - QA：刷新线上新版本后重新生成 1 份 PPT，核对 14 页、图表、讲者备注、导出和余额。
   - QA：确认旧超时任务已退款且不再阻塞新任务。

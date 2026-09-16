@@ -279,6 +279,18 @@ export function cancelGenerate(): void {
   session?.cancel();
   removeRequest(snapshot.jobId);
   stopTimer();
+  patch({
+    status: 'cancelled',
+    error: {
+      code: 'CANCELLED',
+      message: '已取消生成，积分会退还',
+      refunded: true,
+      creditsBalance: 0,
+      retryable: true,
+    },
+    errorText: '已取消生成，积分会退还',
+    elapsedMs: snapshot.startedAt ? Date.now() - snapshot.startedAt : 0,
+  });
   trackService.track('generate_fail', { code: 'CANCELLED', byUser: true });
 }
 

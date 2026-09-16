@@ -563,6 +563,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
               const decoder = new TextDecoder();
               let buffer = '';
               const streamTimer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+              let providerFinished = false;
               try {
                 for (;;) {
                   const { done, value } = await reader.read();
@@ -580,9 +581,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
                         send('delta', { text: parsed.text });
                       }
                       if (parsed.usage) usage = parsed.usage;
-                      if (parsed.finish) break;
+                      if (parsed.finish) {
+                        providerFinished = true;
+                        break;
+                      }
                     }
+                    if (providerFinished) break;
                     idx = buffer.indexOf('\n\n');
+                  }
+                  if (providerFinished) {
+                    // 某些模型网关在发送 finish/[DONE] 后仍保持连接，
+                    // 不主动结束读取会让前端永远收不到最终 done 事件。
+                    await reader.cancel().catch(() => undefined);
+                    break;
                   }
                 }
               } finally {
@@ -930,6 +941,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           const decoder = new TextDecoder();
           let buffer = '';
           const streamTimer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+          let providerFinished = false;
           try {
             for (;;) {
               const { done, value } = await reader.read();
@@ -947,9 +959,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
                     send('delta', { text: parsed.text });
                   }
                   if (parsed.usage) usage = parsed.usage;
-                  if (parsed.finish) break;
+                  if (parsed.finish) {
+                    providerFinished = true;
+                    break;
+                  }
                 }
+                if (providerFinished) break;
                 idx = buffer.indexOf('\n\n');
+              }
+              if (providerFinished) {
+                await reader.cancel().catch(() => undefined);
+                break;
               }
             }
           } finally {
