@@ -42,6 +42,8 @@ import { getSearchAdapter } from '../_shared/search/index.ts';
 const MODEL_TIMEOUT_MS = 120_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
+/** 超过该时长仍为 running 的任务视为孤儿任务，生成前幂等退款并释放并发锁。 */
+const STALE_JOB_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * 「超范围需求」关键词：一次要生成整学期 / 全册 / 整个单元的内容。
@@ -138,6 +140,45 @@ async function refundOrphanReserve(opts: {
     p_error_message: opts.errorMessage,
   });
   if (error) console.error('[generate] 孤儿预扣退款失败：', error.message);
+}
+
+/**
+ * 回收上一次请求异常断开后遗留的 running 任务。
+ *
+ * Edge Function 的整体超时/客户端断网可能绕过当前请求的 finally，
+ * 令 generation_jobs 长时间保持 running，进而永久触发单用户并发限制。
+ * 只处理超过服务端模型超时两倍以上的任务，并复用幂等退款 RPC，
+ * 不影响仍在正常执行的生成。
+ */
+async function recoverStaleRunningJobs(userId: string): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_JOB_TIMEOUT_MS).toISOString();
+  const sb = adminClient();
+  const { data, error } = await sb
+    .from('generation_jobs')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('status', 'running')
+    .lt('started_at', cutoff)
+    .order('started_at', { ascending: true })
+    .limit(3);
+
+  if (error) {
+    console.warn('[generate] 孤儿任务检查失败，继续按正常并发规则处理：', error.message);
+    return;
+  }
+
+  for (const row of data ?? []) {
+    const jobId = typeof row.id === 'string' ? row.id : '';
+    if (!jobId) continue;
+    const result = await sb.rpc('refund_generation', {
+      p_job_id: jobId,
+      p_error_code: 'TIMEOUT',
+      p_error_message: '生成任务超过服务端超时时间，系统自动退款',
+    });
+    if (result.error) {
+      console.warn('[generate] 孤儿任务退款失败：', result.error.message);
+    }
+  }
 }
 
 /**
@@ -277,6 +318,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
         // ---- 1. 生成前检查（日限 / 并发 / 月度阀）----
         await assertUnderMonthlyCap();
+        await recoverStaleRunningJobs(caller.userId);
         const allowed = await userSb.rpc('check_generation_allowed');
         const allowedRaw = (allowed.data ?? {}) as { allowed?: boolean; code?: string; message?: string };
         if (allowedRaw.allowed === false) {

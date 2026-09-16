@@ -9,6 +9,9 @@
   - 确认模型已返回完整 14 页 DocModel JSON，包含学习目标、导入、描点法、真实函数图表、例题与变式、互动、易错点、小结、分层作业和讲者备注。
   - 修复前端 SSE 解析：支持 LF/CRLF 空行分隔，流关闭时 flush TextDecoder，并解析没有末尾空行的残留尾帧，避免 `done` 事件被吞掉。
   - 保留此前生成任务孤儿预扣幂等退款与真实模型生成链路修复。
+  - 定位第二次回归被旧 `running` 任务拦截的问题：上一次异常中断后任务未释放并发锁。
+  - 在 `generate` Edge Function 增加孤儿任务回收：仅处理超过 5 分钟的 `running` 任务，复用幂等退款 RPC 后释放锁，不影响正常生成。
+  - 已将该 Edge Function 部署到 Supabase。
 - 修改的文件：
   - `src/services/generateService.ts`
   - `supabase/functions/generate/index.ts`
@@ -20,9 +23,11 @@
   - `node scripts/check-functions.mjs` 45/45 通过。
   - 浏览器真实测试收到约 12.7 KB 完整 PPT JSON；页面此前卡在 70%，问题定位为完成事件收尾/状态推进未可靠完成。
   - 未重复点击生成，避免重复扣费。
+  - 孤儿任务回收逻辑已通过 Edge Function 语法体检并完成 Supabase 部署；需线上重新发起一次 PPT 验证实际回收和新任务完成。
 - 遗留问题：
   - 当前浏览器中的旧任务在页面状态重置后显示“任务已结束”，不能作为修复后的成功预览证据。
   - GitHub Pages 发布完成后仍需重新发起一次真实 PPT，验证完成页、文档查看、PPTX 导出和余额扣除。
 - 下一步：
   - 运维：提交并推送 GitHub，等待 Pages Actions 完成。
   - QA：刷新线上站点后重新生成 1 份 PPT，核对 14 页、图表、讲者备注、导出和余额。
+  - QA：确认旧超时任务已退款且不再阻塞新任务。
