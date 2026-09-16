@@ -42,8 +42,11 @@ import { getSearchAdapter } from '../_shared/search/index.ts';
 const MODEL_TIMEOUT_MS = 120_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
-/** 超过该时长仍为 running 的任务视为孤儿任务，生成前幂等退款并释放并发锁。 */
-const STALE_JOB_TIMEOUT_MS = 5 * 60_000;
+/**
+ * 超过模型超时并留出少量收尾时间仍为 running 的任务视为孤儿任务。
+ * 不能使用过长阈值，否则旧请求会在数据库里长期占住单用户并发锁。
+ */
+const STALE_JOB_TIMEOUT_MS = MODEL_TIMEOUT_MS + 15_000;
 
 /** 文档模型流没有可靠 finish 帧时，用完整 JSON 作为收尾信号。 */
 function isCompleteJsonObject(text: string): boolean {
@@ -189,6 +192,17 @@ async function recoverStaleRunningJobs(userId: string): Promise<void> {
     });
     if (result.error) {
       console.warn('[generate] 孤儿任务退款失败：', result.error.message);
+      // 退款 RPC 异常时仍必须释放并发锁；下次请求会再次按幂等 RPC 尝试退款。
+      await sb
+        .from('generation_jobs')
+        .update({
+          status: 'failed',
+          error_code: 'TIMEOUT',
+          error_message: '生成任务超过服务端超时时间，等待退款重试',
+          finished_at: new Date().toISOString(),
+        })
+        .eq('id', jobId)
+        .eq('status', 'running');
     }
   }
 }
