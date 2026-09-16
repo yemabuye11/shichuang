@@ -125,6 +125,7 @@ export type GenerateErrorCode =
   | 'MONTHLY_CAP'
   | 'MODEL_ERROR'
   | 'TOKEN_LIMIT'
+  | 'TIMEOUT'
   | 'VALIDATE_FAILED'
   | 'STORE_FAILED'
   | 'CANCELLED'

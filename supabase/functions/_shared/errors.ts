@@ -10,6 +10,7 @@ export type ErrorCode =
   | 'MONTHLY_CAP'
   | 'MODEL_ERROR'
   | 'TOKEN_LIMIT'
+  | 'TIMEOUT'
   | 'VALIDATE_FAILED'
   | 'STORE_FAILED'
   | 'CANCELLED'
@@ -45,6 +46,7 @@ export const STATUS: Record<ErrorCode, number> = {
   MONTHLY_CAP: 503,
   MODEL_ERROR: 502,
   TOKEN_LIMIT: 502,
+  TIMEOUT: 504,
   VALIDATE_FAILED: 422,
   STORE_FAILED: 500,
   CANCELLED: 499,

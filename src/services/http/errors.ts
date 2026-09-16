@@ -44,6 +44,8 @@ export function errorText(code: GenerateErrorCode | string): string {
       return 'AI 服务开小差了，本次不扣积分，点重试再来一次';
     case 'TOKEN_LIMIT':
       return '这次内容太长了，试试把需求写得简洁一些（不扣积分）';
+    case 'TIMEOUT':
+      return '生成超过 90 秒，已停止本次任务，请缩小范围后重试';
     case 'VALIDATE_FAILED':
       return '这次没生成成功，已退还积分，点重试或换个说法';
     case 'STORE_FAILED':

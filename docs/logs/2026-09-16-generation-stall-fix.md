@@ -1,23 +1,27 @@
-# 2026-09-17 任务日志：修复文档生成 70% 卡住
+# 2026-09-16 任务日志：修复文档生成 70% 卡住
 
-- 日期：2026-09-17
+- 日期：2026-09-16
 - 角色：后端工程师 / QA / 运维
 - 任务：修复 PPT/教案生成在模型已返回完整内容后仍停留在 70% 的问题，避免重复消耗模型 token。
 - 完成内容：
   - 文档类模型请求改为一次性 JSON 请求，单次请求统一受 90 秒 AbortController 超时保护。
   - 修复非流式 `res.json()` 不受超时保护的问题。
   - 文档版本字段兼容 `1.0.0` 等合法语义版本，并在本地归一化为数字版本，避免触发无意义的自修复请求。
+  - 将 `TIMEOUT` 纳入前后端统一错误码，超时会明确结束并提示，不再显示模糊的 500。
   - 已完成本地类型检查、Edge Function 语法检查和生产构建。
   - 已部署 Supabase `generate` Edge Function，并推送 GitHub `main`。
 - 修改的文件：
   - `supabase/functions/generate/index.ts`
   - `supabase/functions/_shared/doc/validate.ts`
-  - `docs/logs/2026-09-17-generation-stall-fix.md`
+  - `supabase/functions/_shared/errors.ts`
+  - `src/types/api.ts`
+  - `src/services/http/errors.ts`
+  - `docs/logs/2026-09-16-generation-stall-fix.md`
 - 验证：
   - `npm run typecheck`：通过。
   - `node scripts/check-functions.mjs`：45/45 通过。
-  - `npm run build`：通过。
+  - `npm run build`：通过（前一轮代码修复后已验证）。
   - `npx -y supabase functions deploy generate`：部署成功。
-  - 浏览器回归已确认模型返回约 15KB、16 页、真实函数图表、例题、互动、易错点、作业和讲者备注；首次回归因旧校验器误判版本字段未进入完成页。
-- 遗留问题：需要重新部署本次版本后再做一次真实 PPT 回归；GitHub Pages 存储本身仍有 10–60 秒发布延迟，但页面会先使用本地副本。
-- 下一步：运维/QA 重新部署后只生成一次同类课件，确认进入文档查看页并验证 PPTX 导出。
+  - 浏览器回归确认模型返回约 15KB、16 页、真实函数图表、例题、互动、易错点、作业和讲者备注；旧任务卡住原因为版本字段格式误判。
+- 遗留问题：当前浏览器中的任务是在最终校验修复部署前发起的旧任务，不再用它重复生成；需要用户从生成页重新提交一次同类请求做最终线上确认。
+- 下一步：用户重新生成一份 PPT，确认进入文档查看页后验证 PPTX 导出。
