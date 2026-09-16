@@ -45,6 +45,18 @@ const HEARTBEAT_MS = 10_000;
 /** 超过该时长仍为 running 的任务视为孤儿任务，生成前幂等退款并释放并发锁。 */
 const STALE_JOB_TIMEOUT_MS = 5 * 60_000;
 
+/** 文档模型流没有可靠 finish 帧时，用完整 JSON 作为收尾信号。 */
+function isCompleteJsonObject(text: string): boolean {
+  const candidate = text.trim();
+  if (candidate.length < 64 || !candidate.endsWith('}')) return false;
+  try {
+    const value = JSON.parse(candidate) as unknown;
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 「超范围需求」关键词：一次要生成整学期 / 全册 / 整个单元的内容。
  *
@@ -579,6 +591,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                       if (parsed.text) {
                         raw += parsed.text;
                         send('delta', { text: parsed.text });
+                        if (isCompleteJsonObject(raw)) providerFinished = true;
                       }
                       if (parsed.usage) usage = parsed.usage;
                       if (parsed.finish) {
