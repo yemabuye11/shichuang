@@ -50,7 +50,11 @@ const STALE_JOB_TIMEOUT_MS = MODEL_TIMEOUT_MS + 15_000;
 
 /** 文档模型流没有可靠 finish 帧时，用完整 JSON 作为收尾信号。 */
 function isCompleteJsonObject(text: string): boolean {
-  const candidate = text.trim();
+  const candidate = text
+    .trim()
+    .replace(/^```(?:json|JSON)?\s*/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
   if (candidate.length < 64 || !candidate.endsWith('}')) return false;
   try {
     const value = JSON.parse(candidate) as unknown;
@@ -58,6 +62,16 @@ function isCompleteJsonObject(text: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** 兼容 LF / CRLF 的上游 SSE 空行分隔。 */
+function nextSseFrame(buffer: string): { frame: string; rest: string } | null {
+  const match = /\r?\n\r?\n/.exec(buffer);
+  if (!match || match.index === undefined) return null;
+  return {
+    frame: buffer.slice(0, match.index),
+    rest: buffer.slice(match.index + match[0].length),
+  };
 }
 
 /**
@@ -595,10 +609,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
                   const { done, value } = await reader.read();
                   if (done) break;
                   buffer += decoder.decode(value, { stream: true });
-                  let idx = buffer.indexOf('\n\n');
-                  while (idx >= 0) {
-                    const frame = buffer.slice(0, idx);
-                    buffer = buffer.slice(idx + 2);
+                  let next = nextSseFrame(buffer);
+                  while (next) {
+                    const frame = next.frame;
+                    buffer = next.rest;
                     for (const line of frame.split('\n')) {
                       const parsed = adapter.parseChunk(line);
                       if (!parsed) continue;
@@ -614,7 +628,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                       }
                     }
                     if (providerFinished) break;
-                    idx = buffer.indexOf('\n\n');
+                    next = nextSseFrame(buffer);
                   }
                   if (providerFinished) {
                     // 某些模型网关在发送 finish/[DONE] 后仍保持连接，
@@ -974,10 +988,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
               const { done, value } = await reader.read();
               if (done) break;
               buffer += decoder.decode(value, { stream: true });
-              let idx = buffer.indexOf('\n\n');
-              while (idx >= 0) {
-                const frame = buffer.slice(0, idx);
-                buffer = buffer.slice(idx + 2);
+              let next = nextSseFrame(buffer);
+              while (next) {
+                const frame = next.frame;
+                buffer = next.rest;
                 for (const line of frame.split('\n')) {
                   const parsed = adapter.parseChunk(line);
                   if (!parsed) continue;
@@ -992,7 +1006,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                   }
                 }
                 if (providerFinished) break;
-                idx = buffer.indexOf('\n\n');
+                next = nextSseFrame(buffer);
               }
               if (providerFinished) {
                 await reader.cancel().catch(() => undefined);

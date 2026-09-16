@@ -17,6 +17,8 @@
   - 修复前端取消生成状态：Abort 后立即进入 `cancelled`，避免取消按钮仍显示 63% 生成中。
   - 第二次回归确认旧任务仍占用 `generation_jobs` 并发唯一索引；将孤儿回收阈值从 5 分钟缩短为模型超时 120 秒 + 15 秒，并增加退款 RPC 异常时直接释放锁的兜底。
   - 已重新通过 Edge Function 体检并部署最新 `generate`。
+  - 最终定位模型流 0 B 问题：上游使用 CRLF SSE 空行，服务端只按 LF 分帧，导致 `parseChunk` 没有收到完整事件。已统一兼容 LF/CRLF，并支持带 ```json 围栏的完整 JSON 作为收尾信号。
+  - 最终 `generate` 已再次通过 45/45 Edge Function 检查并部署到 Supabase。
 - 修改的文件：
   - `src/services/generateService.ts`
   - `supabase/functions/generate/index.ts`
@@ -35,11 +37,12 @@
   - 尝试点击“重试一次”进行修复后真实回归时，被浏览器安全审核拦截，未能触发新的积分消费请求。
   - 最新修改再次通过 `npm run typecheck`、`npm run build`、`node scripts/check-functions.mjs`；Supabase `generate` 已重新部署。
   - 最新页面实测返回 `CONCURRENT_LIMIT`，确认阻塞来自历史 `running` 任务，而非积分不足或模型输出。
+  - 锁回收修复后新任务已成功进入模型阶段；最终 SSE 分帧修复部署后等待重新发起真实任务验证。
 - 遗留问题：
   - 当前浏览器中的旧任务在页面状态重置后显示“任务已结束”，不能作为修复后的成功预览证据。
   - GitHub Pages 的本次 Actions 完成状态尚未通过当前环境的 GitHub API 核实。
-  - 仍需下一次请求触发孤儿回收后重新发起一次真实 PPT，验证完成页、文档查看、PPTX 导出和余额扣除。
+  - 仍需浏览器安全审核放行后重新发起一次真实 PPT，验证完成页、文档查看、PPTX 导出和余额扣除。
 - 下一步：
-  - 运维：提交并推送本次 finish 收尾和取消状态修复，确认 GitHub Pages Actions 完成。
+  - 运维：提交并推送最终 SSE 分帧修复，确认 GitHub Pages Actions 完成。
   - QA：刷新线上新版本后重新生成 1 份 PPT，核对 14 页、图表、讲者备注、导出和余额。
   - QA：重新发起 PPT，确认旧超时任务已退款且不再阻塞新任务。
