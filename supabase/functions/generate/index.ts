@@ -68,6 +68,61 @@ const OUT_OF_SCOPE_MESSAGE =
   '一次只能生成一节课（1 课时）的内容哦。请指定具体课时，例如「二次函数图像与性质 第1课时」，这样生成质量更高，也不浪费积分。';
 
 /**
+ * 校验积分预扣 RPC 的结果。
+ *
+ * Supabase RPC 同时返回 data/error 两个通道；只看 data 会把数据库函数
+ * 冲突、权限或参数错误误报成“积分不足”。只有 RPC 明确返回
+ * INSUFFICIENT_CREDITS 时才显示余额不足，其余情况保留为服务异常，便于排查。
+ */
+function describeRpcError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const raw = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
+    const parts = [raw.message, raw.details, raw.hint]
+      .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+      .map((part) => part.trim());
+    const code = typeof raw.code === 'string' && raw.code.trim() ? `[${raw.code.trim()}] ` : '';
+    if (parts.length > 0) return `${code}${parts.join('；')}`;
+  }
+  return String(error ?? '未知错误');
+}
+
+function readReserveBalance(reserve: { data: unknown; error: unknown }): number {
+  if (reserve.error) {
+    const detail = describeRpcError(reserve.error);
+    const safeDetail = detail.replace(/\s+/g, ' ').trim().slice(0, 180);
+    throw new AppError(
+      'UNKNOWN',
+      safeDetail ? `积分服务暂时异常，请稍后重试（${safeDetail}）` : '积分服务暂时异常，请稍后重试',
+      { refundable: false, retryable: true },
+    );
+  }
+
+  const raw = (reserve.data ?? {}) as { ok?: boolean; balance?: number; code?: string; message?: string };
+  if (raw.ok !== true) {
+    const code = raw.code === 'INSUFFICIENT_CREDITS' ? 'INSUFFICIENT_CREDITS' : 'UNKNOWN';
+    throw new AppError(
+      code,
+      code === 'INSUFFICIENT_CREDITS'
+        ? '积分不足啦，可以用兑换码充值，或联系管理员'
+        : raw.message || '积分服务暂时异常，请稍后重试',
+      { refundable: false, retryable: code === 'UNKNOWN' },
+    );
+  }
+  return Number(raw.balance ?? 0);
+}
+
+/** 将模型 HTTP 状态映射为可操作的提示，不把供应商原始响应直接回显给用户。 */
+function modelErrorMessage(provider: string, status: number): string {
+  const source = provider || '当前模型';
+  if (status === 401 || status === 403) return `模型服务鉴权失败（${source}），请检查 API Key 配置`;
+  if (status === 402) return `模型服务余额不足（${source}），请先为模型账户充值`;
+  if (status === 429) return `模型服务繁忙（${source}），请稍后重试`;
+  if (status >= 400 && status < 500) return `模型请求参数错误（${source}，HTTP ${status}）`;
+  return `AI 服务暂时异常（${source}，HTTP ${status}），本次不扣积分`;
+}
+
+/**
  * 判断需求是否超出「一次一课时」的范围。
  *
  * @param prompt 教师原始需求。
@@ -244,15 +299,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             p_app_type: formats[0],
             p_model: modelCfg?.id ?? '',
           });
-          const reserveRaw = (reserve.data ?? {}) as { ok?: boolean; balance?: number; code?: string };
-          if (reserveRaw.ok !== true) {
-            throw new AppError(
-              (reserveRaw.code ?? 'INSUFFICIENT_CREDITS') as AppError['code'],
-              '积分不足啦，可以用兑换码充值，或联系管理员',
-              { refundable: false, retryable: false },
-            );
-          }
-          const balanceAfterReserve = Number(reserveRaw.balance ?? 0);
+          const balanceAfterReserve = readReserveBalance(reserve);
           currentJobId = jobId;
 
           // T09：公开内容市场所需的作者昵称（Caller 无 nickname 字段，从 profiles 取）。
@@ -269,12 +316,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
             callerNickname = '';
           }
 
-          // 单一 generation_jobs（占位 app_id，结算作用在首个真实 appId 上）。
+          // 先创建可退款的 job；app_id 等 apps 草稿成功后再回填，避免外键指向不存在的占位 UUID。
           const firstAppId = crypto.randomUUID();
           const jobInsert = await sb.from('generation_jobs').insert({
             id: jobId,
             user_id: caller.userId,
-            app_id: firstAppId,
+            app_id: null,
             app_type: formats[0],
             model: modelCfg?.id ?? '',
             status: 'running',
@@ -312,6 +359,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
           // 共享的模型调用上下文（所有格式复用同一模型 / 适配器）。
           const { adapter, provider } = chooseAdapter(modelCfg?.provider);
+          // 首选模型没有密钥而发生 provider 降级时，不能继续携带首选模型的 API 地址。
+          // 例如 deepseek 配置降级到 siliconflow，必须让适配器使用自己的默认 endpoint。
+          const selectedApiBase = provider === modelCfg?.provider ? (modelCfg?.apiBase ?? '') : '';
           const isMockFlag = isMock(adapter);
           const cfg = await loadConfig();
           const maxOutput = Number(cfg.limit.maxOutputTokens ?? modelCfg?.maxOutputTokens ?? 8000);
@@ -356,6 +406,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
             });
             if (appInsert.error) {
               throw new AppError('STORE_FAILED', `文档草稿保存失败：${appInsert.error.message}`);
+            }
+            if (appId === firstDoneAppId) {
+              const attachJob = await sb
+                .from('generation_jobs')
+                .update({ app_id: appId })
+                .eq('id', jobId);
+              if (attachJob.error) {
+                throw new AppError('STORE_FAILED', `生成任务关联失败：${attachJob.error.message}`);
+              }
             }
 
             // ---- 4. 拼装本格式提示词（含模板 / 参考课例注入）----
@@ -406,7 +465,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             } else {
               const ctx = {
                 modelId: modelCfg?.modelId ?? 'deepseek-chat',
-                apiBase: modelCfg?.apiBase ?? '',
+                apiBase: selectedApiBase,
                 maxOutputTokens: maxOutput,
                 stream: true,
               };
@@ -429,32 +488,38 @@ Deno.serve(async (req: Request): Promise<Response> => {
               if (!res.ok || !res.body) {
                 const text = await res.text().catch(() => '');
                 console.error(`[generate:doc] 模型返回 ${res.status}`);
-                throw new AppError('MODEL_ERROR', text ? 'AI 服务返回异常，本次不扣积分' : 'AI 服务开小差了，本次不扣积分');
+                void text;
+                throw new AppError('MODEL_ERROR', modelErrorMessage(provider, res.status));
               }
 
               const reader = res.body.getReader();
               const decoder = new TextDecoder();
               let buffer = '';
-              for (;;) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                let idx = buffer.indexOf('\n\n');
-                while (idx >= 0) {
-                  const frame = buffer.slice(0, idx);
-                  buffer = buffer.slice(idx + 2);
-                  for (const line of frame.split('\n')) {
-                    const parsed = adapter.parseChunk(line);
-                    if (!parsed) continue;
-                    if (parsed.text) {
-                      raw += parsed.text;
-                      send('delta', { text: parsed.text });
+              const streamTimer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+              try {
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  buffer += decoder.decode(value, { stream: true });
+                  let idx = buffer.indexOf('\n\n');
+                  while (idx >= 0) {
+                    const frame = buffer.slice(0, idx);
+                    buffer = buffer.slice(idx + 2);
+                    for (const line of frame.split('\n')) {
+                      const parsed = adapter.parseChunk(line);
+                      if (!parsed) continue;
+                      if (parsed.text) {
+                        raw += parsed.text;
+                        send('delta', { text: parsed.text });
+                      }
+                      if (parsed.usage) usage = parsed.usage;
+                      if (parsed.finish) break;
                     }
-                    if (parsed.usage) usage = parsed.usage;
-                    if (parsed.finish) break;
+                    idx = buffer.indexOf('\n\n');
                   }
-                  idx = buffer.indexOf('\n\n');
                 }
+              } finally {
+                clearTimeout(streamTimer);
               }
               if (usage.promptTokens === 0) {
                 usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
@@ -470,7 +535,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 userPrompt: repairPrompt,
               }, {
                 modelId: modelCfg?.modelId ?? 'deepseek-chat',
-                apiBase: modelCfg?.apiBase ?? '',
+                apiBase: selectedApiBase,
                 maxOutputTokens: maxOutput,
                 stream: false,
               });
@@ -661,22 +726,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
           p_app_type: appType,
           p_model: modelCfg?.id ?? '',
         });
-        const reserveRaw = (reserve.data ?? {}) as { ok?: boolean; balance?: number; code?: string };
-        if (reserveRaw.ok !== true) {
-          throw new AppError(
-            (reserveRaw.code ?? 'INSUFFICIENT_CREDITS') as AppError['code'],
-            '积分不足啦，可以用兑换码充值，或联系管理员',
-            { refundable: false, retryable: false },
-          );
-        }
-        const balanceAfterReserve = Number(reserveRaw.balance ?? 0);
+        const balanceAfterReserve = readReserveBalance(reserve);
         currentJobId = jobId;
 
-        // 创建 job + app 草稿
+        // 先创建 job（app_id 暂空），保证后续草稿/模型失败时能按 job 退款。
         const jobInsert = await sb.from('generation_jobs').insert({
           id: jobId,
           user_id: caller.userId,
-          app_id: appId,
+          app_id: null,
           app_type: appType,
           model: modelCfg?.id ?? '',
           status: 'running',
@@ -704,6 +761,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
         if (appInsert.error) {
           throw new AppError('STORE_FAILED', `应用草稿保存失败：${appInsert.error.message}`);
         }
+        const attachJob = await sb
+          .from('generation_jobs')
+          .update({ app_id: appId })
+          .eq('id', jobId);
+        if (attachJob.error) {
+          throw new AppError('STORE_FAILED', `生成任务关联失败：${attachJob.error.message}`);
+        }
 
         // ---- 4. 拼装提示词 ----
         send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
@@ -727,6 +791,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
         // ---- 5. 调模型（SSE 透传）----
         const { adapter, provider } = chooseAdapter(modelCfg?.provider);
+        const selectedApiBase = provider === modelCfg?.provider ? (modelCfg?.apiBase ?? '') : '';
         const cfg = await loadConfig();
         const maxOutput = Number(cfg.limit.maxOutputTokens ?? modelCfg?.maxOutputTokens ?? 8000);
         const maxHtmlBytes = Number(cfg.limit.maxHtmlBytes ?? 204800);
@@ -759,7 +824,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         } else {
           const ctx = {
             modelId: modelCfg?.modelId ?? 'deepseek-chat',
-            apiBase: modelCfg?.apiBase ?? '',
+            apiBase: selectedApiBase,
             maxOutputTokens: maxOutput,
             stream: true,
           };
@@ -783,32 +848,38 @@ Deno.serve(async (req: Request): Promise<Response> => {
             const text = await res.text().catch(() => '');
             // ⚠️ 只记录状态码，绝不记录请求头（含 Authorization）
             console.error(`[generate] 模型返回 ${res.status}`);
-            throw new AppError('MODEL_ERROR', text ? 'AI 服务返回异常，本次不扣积分' : 'AI 服务开小差了，本次不扣积分');
+            void text;
+            throw new AppError('MODEL_ERROR', modelErrorMessage(provider, res.status));
           }
 
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            let idx = buffer.indexOf('\n\n');
-            while (idx >= 0) {
-              const frame = buffer.slice(0, idx);
-              buffer = buffer.slice(idx + 2);
-              for (const line of frame.split('\n')) {
-                const parsed = adapter.parseChunk(line);
-                if (!parsed) continue;
-                if (parsed.text) {
-                  raw += parsed.text;
-                  send('delta', { text: parsed.text });
+          const streamTimer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              let idx = buffer.indexOf('\n\n');
+              while (idx >= 0) {
+                const frame = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                for (const line of frame.split('\n')) {
+                  const parsed = adapter.parseChunk(line);
+                  if (!parsed) continue;
+                  if (parsed.text) {
+                    raw += parsed.text;
+                    send('delta', { text: parsed.text });
+                  }
+                  if (parsed.usage) usage = parsed.usage;
+                  if (parsed.finish) break;
                 }
-                if (parsed.usage) usage = parsed.usage;
-                if (parsed.finish) break;
+                idx = buffer.indexOf('\n\n');
               }
-              idx = buffer.indexOf('\n\n');
             }
+          } finally {
+            clearTimeout(streamTimer);
           }
           if (usage.promptTokens === 0) {
             usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
@@ -827,7 +898,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             userPrompt: repairPrompt,
           }, {
             modelId: modelCfg?.modelId ?? 'deepseek-chat',
-            apiBase: modelCfg?.apiBase ?? '',
+            apiBase: selectedApiBase,
             maxOutputTokens: maxOutput,
             stream: false,
           });

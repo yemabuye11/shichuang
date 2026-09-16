@@ -1,0 +1,34 @@
+# 2026-09-16 任务日志：积分与真实 PPT 生成链路修复
+
+- 日期：2026-09-16
+- 角色：后端工程师 / 前端工程师 / QA / 运维
+- 任务：定位并修复“账户有 100 积分却提示不足”、生成任务外键失败、模型路由错误、流式任务长时间挂起及刷新重复提交问题，并完成线上测试。
+- 完成内容：
+  - 生成 Edge Function 检查 Supabase RPC `error` 通道；只有 RPC 明确返回 `INSUFFICIENT_CREDITS` 才提示积分不足。
+  - 0048 定向清理线上 `reserve_credits(integer, ...)` 重载，保留 numeric 版本，消除 `PGRST203`。
+  - 生成流程改为先写 `generation_jobs(app_id=null)`，创建 `apps` 草稿后再回填 `app_id`，修复外键失败并保证失败可退款。
+  - provider 降级时使用所选适配器自己的 endpoint；线上默认模型切换为 SiliconFlow 的 `deepseek-ai/DeepSeek-V4-Flash`。
+  - 增加覆盖整个流式读取过程的 120 秒超时，防止任务永久 `running`。
+  - 终态清理生成请求 sessionStorage，避免刷新失败页复用旧幂等键。
+  - 补回一次已确认的孤儿预扣 8 积分，并终止一笔长期挂起任务后退款；线上账户余额核对为 100。
+- 修改的文件：
+  - `supabase/functions/generate/index.ts`
+  - `src/hooks/useGenerate.ts`
+  - `supabase/migrations/0048_credit_reserve_unambiguous.sql`
+  - `supabase/migrations/0049_siliconflow_valid_model.sql`
+  - `supabase/migrations/0050_siliconflow_v4_flash.sql`
+  - `docs/logs/2026-09-16-credit-generation-fix.md`
+- 验证：
+  - `npm run typecheck` 通过。
+  - `npm run build` 通过。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - 线上定向执行 0048、0049、0050 成功。
+  - `generate` Edge Function 已部署。
+  - 真实测试已验证：积分预扣成功、任务外键修复、失败自动退款、流式超时自动退款；当前页面测试尚未拿到成功预览，V4 Flash 长 JSON 仍需继续观察实际响应速度。
+- 遗留问题：
+  - 线上 GitHub Pages 前端尚未包含本次 `src/hooks/useGenerate.ts` 修复，需推送后等待 Actions 发布。
+  - SiliconFlow 长输出在本次 120 秒窗口内仍可能超时，需前端发布后用 V4 Flash 再测一次；若仍超时，需要进一步降低提示词冗余或拆分“结构生成/内容生成”两阶段。
+  - `total_used` 按流水累计口径保留失败预扣记录，余额口径已正确退款。
+- 下一步：
+  - 运维：提交并推送 GitHub，等待 Pages Actions 完成后刷新线上页面。
+  - QA：重新发起同一 PPT，确认进入预览、PPTX 下载、页数/图表/讲者备注及余额扣除口径。

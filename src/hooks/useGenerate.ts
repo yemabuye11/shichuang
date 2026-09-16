@@ -133,6 +133,15 @@ function saveRequest(jobId: string, req: GenerateRequest): void {
   }
 }
 
+/** 任务进入终态后清理恢复数据，避免刷新失败页再次自动提交。 */
+function removeRequest(jobId: string): void {
+  try {
+    globalThis.sessionStorage?.removeItem(REQ_KEY_PREFIX + jobId);
+  } catch {
+    /* 忽略 */
+  }
+}
+
 /** 读取（并消费）暂存的请求。 */
 export function loadRequest(jobId: string): GenerateRequest | null {
   try {
@@ -178,6 +187,7 @@ function handleEvent(event: GenEvent): void {
       // 心跳只用于保活，不改变状态
       break;
     case 'done': {
+      removeRequest(snapshot.jobId);
       const result = event.data;
       const nextResults = snapshot.results.some((r) => r.appId === result.appId)
         ? snapshot.results
@@ -206,6 +216,7 @@ function handleEvent(event: GenEvent): void {
       break;
     }
     case 'error': {
+      removeRequest(snapshot.jobId);
       patch({
         status: event.data.code === 'CANCELLED' ? 'cancelled' : 'error',
         error: event.data,
@@ -243,6 +254,7 @@ export function startGenerate(req: GenerateRequest): void {
   session = generateService.startGenerate(req, {
     onEvent: handleEvent,
     onError: (err) => {
+      removeRequest(snapshot.jobId);
       patch({
         status: 'error',
         errorText: err.message,
@@ -265,6 +277,7 @@ export function startGenerate(req: GenerateRequest): void {
 /** 取消生成（服务端会退还预扣积分）。 */
 export function cancelGenerate(): void {
   session?.cancel();
+  removeRequest(snapshot.jobId);
   stopTimer();
   trackService.track('generate_fail', { code: 'CANCELLED', byUser: true });
 }
@@ -379,7 +392,8 @@ function cryptoRandomId(): string {
 /**
  * 生成中页面的「恢复 + 结束副作用」hook。
  *
- * - 若刷新后状态机为空但 URL 上有 jobId，尝试从 sessionStorage 恢复请求并重跑；
+ * - 若刷新后状态机为空且任务仍未进入终态，尝试从 sessionStorage 恢复请求；
+ * - 任务成功/失败/取消后会清理恢复数据，刷新终态页不会再次提交生成；
  * - 生成结束后触发 `onDone` / `onFailed` 回调（供页面刷新积分、跳转等）。
  *
  * @param jobId 路由上的任务 ID。
