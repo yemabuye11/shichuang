@@ -49,6 +49,16 @@ const COMMON_PRESETS: readonly CreateTextbookVersionInput[] = [
   { year: '2024', grade: '六年级', subject: '数学', publisher: '人民教育出版社', version: '人教版 2024版', chapter: '' },
 ];
 
+function matchesPreset(version: TextbookVersion, preset: CreateTextbookVersionInput): boolean {
+  return (
+    version.year === preset.year &&
+    version.grade === preset.grade &&
+    version.subject === preset.subject &&
+    version.publisher === preset.publisher &&
+    version.version === preset.version
+  );
+}
+
 export function TextbookCascade({
   options,
   versions,
@@ -69,6 +79,7 @@ export function TextbookCascade({
   const [saving, setSaving] = useState(false);
   const [quickCreating, setQuickCreating] = useState<string | null>(null);
   const [quickError, setQuickError] = useState('');
+  const missingPresets = COMMON_PRESETS.filter((preset) => !versions.some((version) => matchesPreset(version, preset)));
 
   /** 按已选维度逐级过滤版本列表（层级间互相约束即为「级联」）。 */
   const filtered = useMemo(
@@ -94,6 +105,14 @@ export function TextbookCascade({
     if (level <= 2) setVersionDim(ALL);
   };
 
+  const applySelection = (version: TextbookVersion): void => {
+    onSelectVersion(version.id);
+    setGrade(version.grade);
+    setSubject(version.subject);
+    setPublisher(version.publisher);
+    setVersionDim(version.version);
+  };
+
   const selectSx = { minWidth: 116, bgcolor: '#fff' } as const;
 
   const openCreate = (): void => {
@@ -105,15 +124,16 @@ export function TextbookCascade({
   const createPreset = async (preset: CreateTextbookVersionInput): Promise<void> => {
     if (!onCreateVersion || quickCreating) return;
     const key = `${preset.grade}-${preset.subject}-${preset.version}`;
+    const existing = versions.find((v) => matchesPreset(v, preset));
+    if (existing) {
+      applySelection(existing);
+      return;
+    }
     setQuickCreating(key);
     setQuickError('');
     try {
       const created = await onCreateVersion(preset);
-      onSelectVersion(created.id);
-      setGrade(created.grade);
-      setSubject(created.subject);
-      setPublisher(created.publisher);
-      setVersionDim(created.version);
+      applySelection(created);
     } catch (err) {
       setQuickError(err instanceof Error ? err.message : '教材版本创建失败，请改用手动新建');
     } finally {
@@ -127,11 +147,7 @@ export function TextbookCascade({
     setSaving(true);
     try {
       const created = await onCreateVersion(form);
-      onSelectVersion(created.id);
-      setGrade(created.grade);
-      setSubject(created.subject);
-      setPublisher(created.publisher);
-      setVersionDim(created.version);
+      applySelection(created);
       if (created.chapter) onChapterChange(created.chapter);
       setDialogOpen(false);
       setForm({ year: String(new Date().getFullYear()), version: '', publisher: '', subject: '', grade: '', chapter: '', file: null });
@@ -170,6 +186,7 @@ export function TextbookCascade({
           onChange={(e) => {
             setGrade(e.target.value);
             resetLower(0);
+            onSelectVersion(null);
           }}
           sx={selectSx}
         >
@@ -189,6 +206,7 @@ export function TextbookCascade({
           onChange={(e) => {
             setSubject(e.target.value);
             resetLower(1);
+            onSelectVersion(null);
           }}
           sx={selectSx}
         >
@@ -208,6 +226,7 @@ export function TextbookCascade({
           onChange={(e) => {
             setPublisher(e.target.value);
             resetLower(2);
+            onSelectVersion(null);
           }}
           sx={selectSx}
         >
@@ -226,6 +245,7 @@ export function TextbookCascade({
           value={versionDim}
           onChange={(e) => {
             setVersionDim(e.target.value);
+            onSelectVersion(null);
           }}
           sx={selectSx}
         >
@@ -238,6 +258,33 @@ export function TextbookCascade({
         </TextField>
       </Stack>
 
+      {onCreateVersion && missingPresets.length > 0 ? (
+        <Box sx={{ mt: 1.25 }}>
+          <Typography sx={{ fontSize: 12.5, color: 'text.secondary', mb: 0.65 }}>
+            常用版本（已有版本会直接选中，未找到时可一键创建）
+          </Typography>
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', gap: 0.75 }}>
+            {missingPresets.map((preset) => {
+              const key = `${preset.grade}-${preset.subject}-${preset.version}`;
+              return (
+                <Button
+                  key={key}
+                  size="small"
+                  variant="outlined"
+                  startIcon={<MenuBookIcon />}
+                  onClick={() => void createPreset(preset)}
+                  disabled={loading || quickCreating !== null}
+                  sx={{ textTransform: 'none' }}
+                >
+                  {quickCreating === key ? '绑定中…' : `${preset.grade}·${preset.subject}·${preset.version}`}
+                </Button>
+              );
+            })}
+          </Stack>
+          {quickError ? <Typography sx={{ fontSize: 13, color: 'error.main', mt: 0.5 }}>{quickError}</Typography> : null}
+        </Box>
+      ) : null}
+
       {versions.length === 0 ? (
         <Stack spacing={1} sx={{ mt: 1.25 }}>
           <Typography sx={{ fontSize: 13, color: 'text.secondary', lineHeight: 1.6 }}>
@@ -245,28 +292,9 @@ export function TextbookCascade({
           </Typography>
           {onCreateVersion ? (
             <>
-              <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', gap: 0.75 }}>
-                {COMMON_PRESETS.map((preset) => {
-                  const key = `${preset.grade}-${preset.subject}-${preset.version}`;
-                  return (
-                    <Button
-                      key={key}
-                      size="small"
-                      variant="outlined"
-                      startIcon={<MenuBookIcon />}
-                      onClick={() => void createPreset(preset)}
-                      disabled={loading || quickCreating !== null}
-                      sx={{ textTransform: 'none' }}
-                    >
-                      {quickCreating === key ? '绑定中…' : `${preset.grade}·${preset.subject}·${preset.version}`}
-                    </Button>
-                  );
-                })}
-              </Stack>
               <Button size="small" variant="text" startIcon={<AddIcon />} onClick={openCreate} disabled={loading || quickCreating !== null} sx={{ alignSelf: 'flex-start' }}>
                 手动新建或上传电子教材
               </Button>
-              {quickError ? <Typography sx={{ fontSize: 13, color: 'error.main' }}>{quickError}</Typography> : null}
             </>
           ) : null}
         </Stack>

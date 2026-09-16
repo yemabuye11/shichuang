@@ -241,11 +241,74 @@ export function buildMockDoc(docType: string, prompt: string): string {
     verifyHints: ['示例内容，请教师核对并替换为真实教材内容'],
   };
   if (docType === 'ppt') {
-    model.slides = [
-      { index: 0, title: '封面', body: [{ id: 's0', type: 'heading', level: 1, text: safeTopic }], layout: 'title' },
-      { index: 1, title: '学习目标', body: [{ id: 's1', type: 'list', ordered: false, items: ['目标一', '目标二'] }], layout: 'content' },
-      { index: 2, title: '小结', body: [{ id: 's2', type: 'paragraph', text: '本节小结' }], layout: 'section' },
+    const points = [[-2, 5], [-1, 0], [0, -3], [1, -4], [2, -3], [3, 0], [4, 5]];
+    const titles = [
+      '封面',
+      '学习目标',
+      '情境导入',
+      '概念与表示',
+      '图像特征探究',
+      '例题一：求关键点',
+      '例题二：判断变化',
+      '课堂活动：读图交流',
+      '易错点辨析',
+      '分层练习',
+      '本节小结',
+      '课后作业',
     ];
+    const charts = new Set([2, 4, 5, 6, 7, 9]);
+    model.slides = titles.map((title, index) => {
+      const body = [
+        {
+          id: `s${index}-p`,
+          type: 'paragraph',
+          text:
+            index === 0
+              ? `${safeTopic}：一节课的核心概念、例题和练习。`
+              : `本页围绕“${title}”展开，先观察具体信息，再用一句完整的话说出你的判断依据，最后把结论写进笔记。`,
+        },
+        {
+          id: `s${index}-l`,
+          type: 'list',
+          ordered: false,
+          items:
+            index === 0
+              ? ['适用年级：中学', '建议课时：45分钟']
+              : ['教师提问：你从数据或图形中发现了什么？', '学生表达：给出结论并说明理由。'],
+        },
+      ];
+      if (charts.has(index)) {
+        body.push({
+          id: `s${index}-c`,
+          type: 'chart',
+          chart: {
+            kind: index === 7 ? 'bar' : 'function',
+            expression: 'y = x^2 - 2x - 3',
+            xLabel: 'x',
+            yLabel: 'y',
+            points,
+            categories: ['A', 'B', 'C', 'D'],
+            values: [3, 6, 4, 8],
+          },
+          caption: '图示关键数据关系，帮助学生从变化趋势、顶点和交点三个角度核对结论。',
+        });
+      }
+      if (index === 8) {
+        body.push({
+          id: `s${index}-t`,
+          type: 'table',
+          header: ['判断对象', '常见错误', '核对方法'],
+          rows: [['顶点', '把横纵坐标写反', '先看横坐标再看纵坐标'], ['交点', '漏写坐标轴', '代入原式验算']],
+        });
+      }
+      return {
+        index,
+        title,
+        body,
+        notes: `讲到“${title}”时先停顿并邀请学生观察，再追问“你的依据是什么”。根据学生回答补充一步演算，最后用一句话收束本页结论。`,
+        layout: index === 0 ? 'title' : index === 10 ? 'section' : index === 3 || index === 8 ? 'two_col' : 'content',
+      };
+    });
   }
   if (docType === 'courseware_3d') {
     model.scene = {

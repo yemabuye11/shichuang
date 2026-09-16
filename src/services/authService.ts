@@ -345,18 +345,32 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const user = sessionData?.session?.user;
   if (!user) return null;
 
-  const [{ data: profileRow }, { data: accountRow }, { data: membershipRow }] = await Promise.all([
+  const [{ data: profileRow }, { data: accountRow }, { data: membershipRow }, { data: summaryRow }] = await Promise.all([
     sb.from('profiles').select('*').eq('id', user.id).maybeSingle(),
     sb.from('credit_accounts').select('*').eq('user_id', user.id).maybeSingle(),
     sb.from('user_memberships').select('*').eq('user_id', user.id).maybeSingle(),
+    // 与 reserve_credits 保持同一可用余额口径，避免过期体验分仍显示在全站顶部。
+    sb.rpc('get_my_summary'),
   ]);
 
   const profile = toProfile(profileRow);
   if (!profile) return null;
 
+  const account = toCreditAccount(accountRow);
+  if (summaryRow && typeof summaryRow === 'object' && 'balance' in summaryRow) {
+    const effectiveBalance = Number((summaryRow as { balance?: unknown }).balance);
+    if (Number.isFinite(effectiveBalance)) {
+      return {
+        profile,
+        account: { ...account, balance: effectiveBalance },
+        membership: toUserMembership(membershipRow),
+      };
+    }
+  }
+
   return {
     profile,
-    account: toCreditAccount(accountRow),
+    account,
     membership: toUserMembership(membershipRow),
   };
 }

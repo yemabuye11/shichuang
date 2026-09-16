@@ -31,9 +31,20 @@ export async function getBalance(): Promise<CreditAccount | null> {
   const uid = sessionData?.session?.user?.id;
   if (!uid) return null;
 
-  const { data, error } = await sb.from('credit_accounts').select('*').eq('user_id', uid).maybeSingle();
+  const [{ data, error }, { data: summary }] = await Promise.all([
+    sb.from('credit_accounts').select('*').eq('user_id', uid).maybeSingle(),
+    // 注册赠送积分可能已过期；get_my_summary 会按 credit_lots 扣除过期批次，
+    // 让页面余额与 reserve_credits 的真实可用口径一致。
+    sb.rpc('get_my_summary'),
+  ]);
   if (error) throw new AppError('UNKNOWN', '读取积分失败，请重试', error);
-  return data ? toCreditAccount(data) : null;
+  if (!data) return null;
+  const account = toCreditAccount(data);
+  if (summary && typeof summary === 'object' && 'balance' in summary) {
+    const effectiveBalance = Number((summary as { balance?: unknown }).balance);
+    if (Number.isFinite(effectiveBalance)) return { ...account, balance: effectiveBalance };
+  }
+  return account;
 }
 
 /**
