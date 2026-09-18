@@ -2360,6 +2360,7 @@ function withPptPartBudget(
     languageRule +
     '禁止输出 data:image/svg+xml、外链图片或长 SVG；图表数据保持简短。\n' +
     '禁止出现“我按某年级理解”“不对可以让老师改”“AI生成”等模型自述；最后一页写成教师可直接授课的核对清单。\n' +
+    '涉及生字书写时，只写观察结构、书空、描红、对比和易错点，不要自行拆分偏旁、部件或笔顺。\n' +
     '只输出一个完整 JSON 对象，不要解释，不要输出代码块以外的文字。'
   );
 }
@@ -2417,6 +2418,13 @@ function stripPptSelfTalk(value: string): string {
 }
 
 const EARLY_PPT_STATISTIC_TEXT = /数据|频率|次数|难度|预估|最多|最少|最高|最低|比例|趋势|统计|排名|其次|较少|较多|更常见|最常|少见|出现得/;
+const WRITING_BREAKDOWN_TEXT = /左边|右边|上面|下面|先写|再写|笔顺|偏旁|部件|像.*手|像.*树|像.*水/;
+const SAFE_WRITING_STEPS = [
+  '先看范字，找出最容易写错的地方。',
+  '跟着老师书空一遍，记住起笔和收笔。',
+  '在田字格里描一个、写两个，注意占格。',
+  '写完和范字比一比，再改一改。',
+];
 
 /** 低龄课件里的 chart 只保留教学画面标签，彻底去掉统计语义。 */
 function normalizeEarlyPptChart(block: DocBlock): DocBlock {
@@ -2482,6 +2490,41 @@ function sanitizePptBlock(block: DocBlock, earlyChildhood: boolean): DocBlock {
   return earlyChildhood ? normalizeEarlyPptChart(sanitized) : sanitized;
 }
 
+/** 生字页不保留模型自行拆分的偏旁、笔顺说明，避免错误内容直接进课堂。 */
+function sanitizeWritingSlide(slide: NonNullable<DocModel['slides']>[number]): NonNullable<DocModel['slides']>[number] {
+  if (!/写字|生字|识字|书写|笔顺/.test(slide.title ?? '')) return slide;
+  const targetText = (slide.title ?? '').split(/[:：]/).slice(1).join('：');
+  const targetChars = [...targetText].filter((char) => /[\u4e00-\u9fff]/.test(char)).slice(0, 4);
+  const body = slide.body.flatMap((block): DocBlock[] => {
+    if (targetChars.length >= 2 && (block.type === 'chart' || block.type === 'image')) {
+      return [{
+        id: block.id,
+        type: 'chart',
+        chart: {
+          kind: 'bar',
+          title: '生字卡',
+          categories: targetChars,
+          values: targetChars.map(() => 1),
+        },
+        caption: `认一认，写一写：${targetChars.join('、')}`,
+      }];
+    }
+    const values = [block.text, ...(block.items ?? [])].filter((value): value is string => Boolean(value));
+    if (!values.some((value) => WRITING_BREAKDOWN_TEXT.test(value))) return [block];
+    if (block.type === 'list') {
+      return [{ ...block, ordered: true, items: [...SAFE_WRITING_STEPS] }];
+    }
+    if (block.type === 'paragraph' || block.type === 'callout') {
+      return [{ ...block, text: '写字前先观察范字，跟着老师书空，再描红、练写并对照修改。' }];
+    }
+    return [block];
+  });
+  const notes = slide.notes && WRITING_BREAKDOWN_TEXT.test(slide.notes)
+    ? '先让学生观察范字和关键笔画，教师示范书空；学生描一个、写两个，写完与范字比较并订正。'
+    : slide.notes;
+  return { ...slide, body, notes };
+}
+
 /** 清掉课件里的 AI 自述和低价值道歉，只留下可核查的教学事实。 */
 function sanitizePptModel(model: DocModel): DocModel {
   const earlyChildhood = isEarlyChildhoodGrade(model.meta?.grade);
@@ -2491,15 +2534,17 @@ function sanitizePptModel(model: DocModel): DocModel {
   return {
     ...model,
     blocks: model.blocks.map((block) => sanitizePptBlock(block, earlyChildhood)),
-    slides: model.slides?.map((slide) => ({
-      ...slide,
-      body: slide.body.map((block) => sanitizePptBlock(block, earlyChildhood)),
-      notes: typeof slide.notes === 'string'
-        ? earlyChildhood
-          ? stripEarlyPptStatistics(stripPptSelfTalk(slide.notes))
-          : stripPptSelfTalk(slide.notes)
-        : slide.notes,
-    })),
+    slides: model.slides?.map((slide) =>
+      sanitizeWritingSlide({
+        ...slide,
+        body: slide.body.map((block) => sanitizePptBlock(block, earlyChildhood)),
+        notes: typeof slide.notes === 'string'
+          ? earlyChildhood
+            ? stripEarlyPptStatistics(stripPptSelfTalk(slide.notes))
+            : stripPptSelfTalk(slide.notes)
+          : slide.notes,
+      })
+    ),
     verifyHints,
   };
 }
