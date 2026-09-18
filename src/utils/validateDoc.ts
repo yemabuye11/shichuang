@@ -163,7 +163,8 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
     if (!slide.title || slide.title.trim().length === 0) errors.push(`第 ${index + 1} 页缺少标题`);
   });
 
-  if (visuals < PPT_MIN_VISUALS) errors.push(`PPT 真图不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张 chart 或内联 SVG image`);
+  // 数据型课题必须有真实图表；非数据课题允许用表格、列表和版式表达。
+  if (dataLikeSubject && visuals < PPT_MIN_VISUALS) errors.push(`数据型课题图示不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张真实图表`);
   if (dataLikeSubject && charts < 3) errors.push(`数据型课题图表不足：当前 ${charts} 个 chart，至少需要 3 个真实图表`);
   if (placeholderCount > 0) errors.push(`发现 ${placeholderCount} 处“建议配图/待补充”等施工占位语，请改成真实内容`);
 }

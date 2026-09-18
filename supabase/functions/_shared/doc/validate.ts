@@ -225,8 +225,10 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
     }
   });
 
-  if (visuals < PPT_MIN_VISUALS) {
-    errors.push(`PPT 真图不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张 chart 或内联 SVG image`);
+  // 数据型课题必须用真实图表讲清变化；语文、历史等非数据课题允许用表格、
+  // 列表和版式表达，不强迫模型编造没有依据的数据，否则只会触发无意义的修复重试。
+  if (dataLikeSubject && visuals < PPT_MIN_VISUALS) {
+    errors.push(`数据型课题图示不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张真实图表`);
   }
   if (dataLikeSubject && charts < 3) {
     errors.push(`数据型课题图表不足：当前 ${charts} 个 chart，至少需要 3 个真实图表`);
