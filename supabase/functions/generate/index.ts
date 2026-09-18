@@ -2259,8 +2259,10 @@ function withPptPartBudget(userPrompt: string, part: PptPart): string {
     `这是完整 18 页课件的第 ${part} 段。你只输出 ${range}，` +
     '不要输出另一段，也不要重复封面或目录。\n' +
     `本段必须正好 ${expected} 页，固定顺序：${pages.join('；')}。\n` +
-    '仍然输出完整 DocModel JSON：保留 kind、meta、blocks、slides、version；slides 只放本段页面。\n' +
-    '每页保留 2~3 个正文块，notes 写 45~90 字可直接照读的话，并包含追问或学生易错点。\n' +
+    '只输出 PPT 必需字段：kind、meta、blocks、slides、version；本段 blocks 必须固定为 []。\n' +
+    '所有教学内容只能写进 slides，禁止在 blocks 中重复一遍；禁止输出 verifyHints、createdAt、school 等非必需字段。\n' +
+    'meta 只保留 title、subject、grade、textbook、duration、difficulty。\n' +
+    '每页保留 2~3 个正文块，notes 写 45~80 字可直接照读的话，并包含追问或学生易错点。\n' +
     '本段必须至少 1 个短数据 chart，charts 的 categories / values 各不超过 5 项。\n' +
     '禁止输出 data:image/svg+xml、外链图片或长 SVG；图表数据保持简短。\n' +
     '只输出一个完整 JSON 对象，不要解释，不要输出代码块以外的文字。'
