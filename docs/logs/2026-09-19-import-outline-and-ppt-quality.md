@@ -1,0 +1,40 @@
+# 2026-09-19 任务日志：导入大纲生成与低龄课件质量修复
+
+- 日期：2026-09-19
+- 角色：工程师
+- 任务：学习大纲导入生成 PPT 的交付方式，修复生成超时、下载、低龄课件图表内容、固定页数导致重复，以及生字页错误拆字等问题。
+- 完成内容：
+  - 增加大纲导入能力，支持粘贴文本以及导入 PPTX、DOCX、TXT、Markdown；Office 文件仅在浏览器本地解析。
+  - PPT 生成改为跨请求分段续跑，不再受单次 130 秒任务窗口限制。
+  - 导入大纲时按大纲页数自适应，每段 3 页；12 页大纲生成 12 页，不再强拉到 18 页并重复主题。
+  - 普通“一句话生成 PPT”仍保持 18 页完整课堂流程。
+  - 低龄课件的内部结构化图示统一净化为童趣图标卡，不生成柱形图、折线图或统计图。
+  - 在线预览与 PPTX 导出统一风格，支持编辑保存版本和下载导出。
+  - 生字页去除模型自行拆分的不可靠偏旁、部件和笔顺说明，改为观察范字、书空、描红、对比订正。
+- 修改的文件：
+  - `src/components/generate/OutlineImporter.tsx`
+  - `src/components/editor/DocRenderer.tsx`
+  - `src/pages/GeneratePage.tsx`
+  - `src/hooks/useGenerate.ts`
+  - `src/services/exportService.ts`
+  - `src/services/docService.ts`
+  - `src/services/generateService.ts`
+  - `src/types/api.ts`
+  - `src/utils/outlineImport.ts`
+  - `src/utils/pptAudience.ts`
+  - `src/utils/pptLayout.ts`
+  - `src/utils/validateDoc.ts`
+  - `supabase/functions/_shared/doc/validate.ts`
+  - `supabase/functions/_shared/prompt/compose.ts`
+  - `supabase/functions/generate/index.ts`
+- 验证：
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - GitHub Actions：`1c4cd8b`、`1982bff`、`a7693e0` 均发布成功。
+  - 线上 12 页大纲实测：4 段续跑，170 秒完成，输出 12 页，无重复主题。
+  - 线上导出实测：下载 PPTX 成功，文件含 12 张幻灯片、`ppt/charts` 为 0。
+  - 在线编辑实测：修改标题后保存新版本，导出文件包含修改后的标题。
+  - 生字页实测：错误拆字说明已被替换为安全教学步骤。
+- 遗留问题：无。
+- 下一步：继续观察教师真实大纲的解析覆盖率，并定期抽查生成结果的学科事实准确性。
