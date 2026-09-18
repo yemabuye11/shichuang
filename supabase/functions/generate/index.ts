@@ -570,7 +570,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             // ---- 5. 调模型（文档类流式收集完整 JSON）----
             const budgetedUserPrompt = withDocOutputBudget(composed.userPrompt, f);
             const docMaxOutput = f === 'ppt' ? Math.min(maxOutput, PPT_OUTPUT_TOKEN_CAP) : maxOutput;
-            const docTemperature = f === 'ppt' ? 0.45 : 0.7;
+            const docTemperature = f === 'ppt' ? 0.35 : 0.7;
             const llmReq: LlmRequest = {
               systemPrompt: composed.systemPrompt,
               userPrompt: budgetedUserPrompt,
@@ -618,22 +618,28 @@ Deno.serve(async (req: Request): Promise<Response> => {
             // ---- 6. 校验 + 重试 1 次 ----
             let result = validateDoc(raw, MAX_DOC_BYTES);
             if (!result.ok && !isMockFlag) {
+              send('stage', { stage: 'verify', label: '自检与优化', status: 'running' });
               const truncated =
                 finishReason === 'length' ||
                 isProbablyTruncatedDoc(raw);
               const repairPrompt = truncated
                 ? buildDocCompactRepairPrompt(budgetedUserPrompt, result.errors)
                 : buildDocRepairPrompt(budgetedUserPrompt, result.errors);
-              const repaired = await callOnce(adapter, {
-                ...llmReq,
-                userPrompt: repairPrompt,
-                temperature: f === 'ppt' ? 0.3 : llmReq.temperature,
-              }, {
-                modelId: modelCfg?.modelId ?? 'deepseek-chat',
-                apiBase: selectedApiBase,
-                maxOutputTokens: docMaxOutput,
-                stream: false,
-              });
+              const repaired = await callDocStreaming(
+                adapter,
+                {
+                  ...llmReq,
+                  userPrompt: repairPrompt,
+                  temperature: f === 'ppt' ? 0.25 : llmReq.temperature,
+                },
+                {
+                  modelId: modelCfg?.modelId ?? 'deepseek-chat',
+                  apiBase: selectedApiBase,
+                  maxOutputTokens: Math.min(docMaxOutput, 8_000),
+                  totalTimeoutMs: 70_000,
+                },
+                () => undefined,
+              );
               raw = repaired.content;
               finishReason = repaired.finishReason;
               if (repaired.usage) usage = repaired.usage;
@@ -1415,7 +1421,7 @@ function withDocOutputBudget(userPrompt: string, docType: string): string {
 async function callDocStreaming(
   adapter: ReturnType<typeof chooseAdapter>['adapter'],
   req: LlmRequest,
-  ctx: { modelId: string; apiBase: string; maxOutputTokens: number },
+  ctx: { modelId: string; apiBase: string; maxOutputTokens: number; totalTimeoutMs?: number },
   sendDelta: (text: string) => void,
 ): Promise<ModelCallResult> {
   const built = adapter.buildRequest(req, { ...ctx, stream: true });
@@ -1436,7 +1442,8 @@ async function callDocStreaming(
     idleTimer = setTimeout(() => abortForTimeout('idle'), DOC_STREAM_IDLE_TIMEOUT_MS);
   };
 
-  totalTimer = setTimeout(() => abortForTimeout('total'), DOC_STREAM_MAX_TIMEOUT_MS);
+  const totalTimeoutMs = ctx.totalTimeoutMs ?? DOC_STREAM_MAX_TIMEOUT_MS;
+  totalTimer = setTimeout(() => abortForTimeout('total'), totalTimeoutMs);
   try {
     const res = await fetch(built.url, {
       method: 'POST',
@@ -1519,7 +1526,7 @@ async function callDocStreaming(
         'TIMEOUT',
         timeoutKind === 'idle'
           ? `AI 连续 60 秒没有返回新内容（已收到 ${raw.length} 字），已停止本次任务并退款`
-          : `AI 生成超过 130 秒（已收到 ${raw.length} 字），已停止本次任务并退款`,
+          : `AI 生成超过 ${Math.round(totalTimeoutMs / 1000)} 秒（已收到 ${raw.length} 字），已停止本次任务并退款`,
       );
     }
     throw err;
