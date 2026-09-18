@@ -324,8 +324,11 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
       }
       return value;
     }).join(' ').trim().length;
+    const contentUnits = countPptContentUnits(body);
 
-    if (index > 0 && body.length < 2) errors.push(`第 ${index + 1} 页正文块不足：至少需要 2 个结构化内容块`);
+    if (index > 0 && contentUnits < 2) {
+      errors.push(`第 ${index + 1} 页内容单元不足：至少需要 2 个正文块、列表项或表格行`);
+    }
     if (index > 0 && bodyChars < PPT_MIN_BODY_CHARS) errors.push(`第 ${index + 1} 页内容过薄：正文少于 ${PPT_MIN_BODY_CHARS} 字`);
     if (index > 0 && (slide.notes ?? '').trim().length < PPT_MIN_NOTES_CHARS) errors.push(`第 ${index + 1} 页演讲者备注过短：至少需要 ${PPT_MIN_NOTES_CHARS} 字`);
     if (!slide.title || slide.title.trim().length === 0) errors.push(`第 ${index + 1} 页缺少标题`);
@@ -335,4 +338,23 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
   if (visuals < PPT_MIN_VISUALS) errors.push(`教学图示不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张 chart 或内联 SVG image`);
   if (dataLikeSubject && charts < 3) errors.push(`数据型课题图表不足：当前 ${charts} 个 chart，至少需要 3 个真实图表`);
   if (placeholderCount > 0) errors.push(`发现 ${placeholderCount} 处“建议配图/待补充”等施工占位语，请改成真实内容`);
+}
+
+/** 与 Edge 侧一致：列表项和表格行都算有效内容单元。 */
+function countPptContentUnits(body: readonly DocBlock[]): number {
+  return body.reduce((total, block) => {
+    if (block.type === 'list') {
+      const items = (block.items ?? []).filter(
+        (item) => typeof item === 'string' && item.trim().length > 0,
+      );
+      return total + Math.max(1, items.length);
+    }
+    if (block.type === 'table') {
+      const rows = (block.rows ?? []).filter(
+        (row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim().length > 0),
+      );
+      return total + Math.max(1, rows.length);
+    }
+    return total + 1;
+  }, 0);
 }

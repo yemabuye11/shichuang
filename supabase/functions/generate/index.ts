@@ -62,7 +62,7 @@ const PPT_OUTPUT_TOKEN_CAP = 12_000;
 /** 可续跑 PPT：4 个短请求，每个请求由平台连接独立承载。 */
 const PPT_RESUME_TOTAL_PARTS = 4;
 const PPT_RESUME_PART_MAX_OUTPUT = 3_500;
-const PPT_RESUME_PART_TIMEOUT_MS = 115_000;
+const PPT_RESUME_PART_TIMEOUT_MS = 125_000;
 const PPT_CHECKPOINT_BUCKET = 'apps-html';
 const PPT_CHECKPOINT_PREFIX = 'ppt-resume';
 /** 心跳间隔（毫秒）。 */
@@ -737,9 +737,10 @@ function createPptResumableResponse(
               `[generate:ppt-resume] 合并质量校验失败 job=${jobId}: ${merged.errors.slice(0, 8).join(' | ')}`,
             );
             await removePptResumeFiles(jobId, true);
+            const detail = merged.errors.slice(0, 3).join('；');
             throw new AppError(
               'VALIDATE_FAILED',
-              '这份课件的分段质量未达课堂标准，系统正在自动重新生成',
+              `这份课件的分段质量未达课堂标准${detail ? `（${detail}）` : ''}，系统正在自动重新生成`,
               { retryable: true, refundable: false },
             );
           }

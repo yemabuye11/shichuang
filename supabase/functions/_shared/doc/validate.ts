@@ -433,10 +433,11 @@ function validatePptQuality(
       })
       .join(' ')
       .trim().length;
+    const contentUnits = countPptContentUnits(body);
 
     const skipContentChecks = options.skipFirstSlideQuality === true && index === 0;
-    if (!skipContentChecks && body.length < 2) {
-      errors.push(`第 ${index + 1} 页正文块不足：至少需要 2 个结构化内容块`);
+    if (!skipContentChecks && contentUnits < 2) {
+      errors.push(`第 ${index + 1} 页内容单元不足：至少需要 2 个正文块、列表项或表格行`);
     }
     if (!skipContentChecks && bodyChars < PPT_MIN_BODY_CHARS) {
       errors.push(`第 ${index + 1} 页内容过薄：正文少于 ${PPT_MIN_BODY_CHARS} 字`);
@@ -462,6 +463,31 @@ function validatePptQuality(
   if (placeholderCount > 0) {
     errors.push(`发现 ${placeholderCount} 处“建议配图/待补充”等施工占位语，请改成真实内容`);
   }
+}
+
+/**
+ * 计算一页的有效内容单元。
+ *
+ * 一个 list 内可能有多个教学要点，不能把它机械地当成单个正文块；
+ * table 的每行同样承载独立信息。这样既挡住空提纲页，又不会误杀
+ * “一个列表讲清四个学习目标”这类合格课堂页。
+ */
+function countPptContentUnits(body: readonly DocBlock[]): number {
+  return body.reduce((total, block) => {
+    if (block.type === 'list') {
+      const items = (block.items ?? []).filter(
+        (item) => typeof item === 'string' && item.trim().length > 0,
+      );
+      return total + Math.max(1, items.length);
+    }
+    if (block.type === 'table') {
+      const rows = (block.rows ?? []).filter(
+        (row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim().length > 0),
+      );
+      return total + Math.max(1, rows.length);
+    }
+    return total + 1;
+  }, 0);
 }
 
 /**
