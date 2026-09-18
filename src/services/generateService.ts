@@ -6,6 +6,7 @@ import { isMockMode } from '@/config/env';
 import * as mockStore from './mock/mockStore';
 import * as artifactService from './artifactService';
 import type {
+  CheckpointEvent,
   DeltaEvent,
   DoneEvent,
   ErrorEvent,
@@ -600,6 +601,8 @@ export function parseFrame(frame: string): GenEvent | null {
       return { type: 'delta', data: payload as DeltaEvent };
     case 'heartbeat':
       return { type: 'heartbeat', data: payload as HeartbeatEvent };
+    case 'checkpoint':
+      return { type: 'checkpoint', data: payload as CheckpointEvent };
     case 'done':
       return { type: 'done', data: payload as DoneEvent };
     case 'error':
