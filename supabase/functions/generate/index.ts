@@ -47,9 +47,9 @@ import { getSearchAdapter } from '../_shared/search/index.ts';
 /** 单次生成超时（毫秒）。 */
 const MODEL_TIMEOUT_MS = 90_000;
 /** 文档流等待首包 / 下一个增量的最大空闲时间。 */
-const DOC_STREAM_IDLE_TIMEOUT_MS = 60_000;
-/** 文档流从发起到收尾的总上限，给 16k 长 JSON 留出余量，同时为退款收尾预留时间。 */
-const DOC_STREAM_MAX_TIMEOUT_MS = 130_000;
+const DOC_STREAM_IDLE_TIMEOUT_MS = 75_000;
+/** 文档流从发起到收尾的总上限；长课件不再在 130 秒处硬切断。 */
+const DOC_STREAM_MAX_TIMEOUT_MS = 180_000;
 /**
  * PPT 首次生成的输出上限。
  *
@@ -621,17 +621,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
               }
               usage = normalizeUsage(null, docJson, composed.systemPrompt + composed.userPrompt);
             } else if (f === 'ppt') {
-              // 18 页拆成两个并行 JSON：每段约 6k token，总耗时不再线性叠加。
-              // 第一段持续给教师可见的实时进度，第二段在后台并行生成。
-              const partMaxOutput = Math.min(docMaxOutput, 6_000);
+              // 18 页拆成三个并行 JSON：每段约 4k token，单段完成即等待合并。
+              // 第一段持续给教师可见的实时进度，后两段在后台并行生成。
+              const partMaxOutput = Math.min(docMaxOutput, 4_500);
               const modelId = resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId);
               const partContext = {
                 modelId,
                 apiBase: selectedApiBase,
                 maxOutputTokens: partMaxOutput,
-                totalTimeoutMs: 120_000,
+                totalTimeoutMs: 160_000,
               };
-              const [firstPart, secondPart] = await Promise.all([
+              const parts = await Promise.all([
                 callDocStreaming(
                   adapter,
                   {
@@ -654,23 +654,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
                   partContext,
                   () => undefined,
                 ),
+                callDocStreaming(
+                  adapter,
+                  {
+                    systemPrompt: composed.systemPrompt,
+                    userPrompt: withPptPartBudget(budgetedUserPrompt, 3),
+                    maxOutputTokens: partMaxOutput,
+                    temperature: docTemperature,
+                  },
+                  partContext,
+                  () => undefined,
+                ),
               ]);
-              raw = mergePptParts(firstPart.content, secondPart.content);
-              finishReason = firstPart.finishReason || secondPart.finishReason;
+              raw = mergePptParts(parts.map((part) => part.content));
+              finishReason = parts.map((part) => part.finishReason).find(Boolean) ?? '';
               usage = normalizeUsage(
                 {
-                  promptTokens:
-                    (firstPart.usage?.promptTokens ?? 0) +
-                    (secondPart.usage?.promptTokens ?? 0),
-                  completionTokens:
-                    (firstPart.usage?.completionTokens ?? 0) +
-                    (secondPart.usage?.completionTokens ?? 0),
-                  cachedTokens:
-                    (firstPart.usage?.cachedTokens ?? 0) +
-                    (secondPart.usage?.cachedTokens ?? 0),
-                  estimated:
-                    (firstPart.usage?.estimated ?? true) ||
-                    (secondPart.usage?.estimated ?? true),
+                  promptTokens: parts.reduce((sum, part) => sum + (part.usage?.promptTokens ?? 0), 0),
+                  completionTokens: parts.reduce((sum, part) => sum + (part.usage?.completionTokens ?? 0), 0),
+                  cachedTokens: parts.reduce((sum, part) => sum + (part.usage?.cachedTokens ?? 0), 0),
+                  estimated: parts.some((part) => part.usage?.estimated ?? true),
                 },
                 raw,
                 composed.systemPrompt + budgetedUserPrompt,
@@ -1515,7 +1518,9 @@ function withDocOutputBudget(userPrompt: string, docType: string): string {
  * 前后两个完整 JSON，再由服务端合并后统一跑质量门禁，既保留课堂流程，也避免
  * 把超时风险转嫁给教师。
  */
-function withPptPartBudget(userPrompt: string, part: 1 | 2): string {
+type PptPart = 1 | 2 | 3;
+
+function withPptPartBudget(userPrompt: string, part: PptPart): string {
   const first = [
     '1. 封面',
     '2. 学习目标',
@@ -1523,14 +1528,16 @@ function withPptPartBudget(userPrompt: string, part: 1 | 2): string {
     '4. 初读任务',
     '5. 字词 / 概念理解',
     '6. 知识讲解 1',
+  ];
+  const second = [
     '7. 知识讲解 2',
     '8. 例题示范',
     '9. 跟着做 / 课堂活动',
-  ];
-  const second = [
     '10. 易错提醒',
     '11. 基础练习',
     '12. 提高练习',
+  ];
+  const third = [
     '13. 迁移应用',
     '14. 课堂讨论',
     '15. 方法归纳',
@@ -1538,24 +1545,27 @@ function withPptPartBudget(userPrompt: string, part: 1 | 2): string {
     '17. 分层作业',
     '18. 教师核对与课上机动提示',
   ];
-  const pages = part === 1 ? first : second;
+  const pages = part === 1 ? first : part === 2 ? second : third;
+  const range = part === 1 ? '第 1~6 页' : part === 2 ? '第 7~12 页' : '第 13~18 页';
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
-    `这是完整 18 页课件的第 ${part} 段。你只输出 ${part === 1 ? '第 1~9 页' : '第 10~18 页'}，` +
+    `这是完整 18 页课件的第 ${part} 段。你只输出 ${range}，` +
     '不要输出另一段，也不要重复封面或目录。\n' +
-    `本段必须正好 9 页，固定顺序：${pages.join('；')}。\n` +
-    '仍然输出完整 DocModel JSON：保留 kind、meta、blocks、slides、version；slides 只放本段 9 页。\n' +
-    '每页保留 2~4 个正文块，notes 写 45~100 字可直接照读的话，并包含追问或学生易错点。\n' +
+    `本段必须正好 6 页，固定顺序：${pages.join('；')}。\n` +
+    '仍然输出完整 DocModel JSON：保留 kind、meta、blocks、slides、version；slides 只放本段 6 页。\n' +
+    '每页保留 2~3 个正文块，notes 写 45~90 字可直接照读的话，并包含追问或学生易错点。\n' +
     (part === 1
-      ? '本段至少 3 个真实教学图示，优先放在初读任务、知识讲解、例题和活动页。\n'
-      : '本段至少 3 个真实教学图示，优先放在练习、讨论、方法归纳和小结页。\n') +
+      ? '本段至少 2 个真实教学图示，优先放在初读任务和知识讲解页。\n'
+      : part === 2
+        ? '本段至少 2 个真实教学图示，优先放在例题、活动和练习页。\n'
+        : '本段至少 2 个真实教学图示，优先放在迁移、讨论、方法归纳和小结页。\n') +
     '只输出一个完整 JSON 对象，不要解释，不要输出代码块以外的文字。'
   );
 }
 
 /** 解析 PPT 分段输出，保留模型返回的 meta / blocks / version。 */
-function parsePptPart(raw: string, part: 1 | 2): Record<string, unknown> {
+function parsePptPart(raw: string, part: PptPart): Record<string, unknown> {
   const json = extractDocJson(raw);
   if (!json) {
     throw new AppError('VALIDATE_FAILED', `PPT 第 ${part} 段没有返回 JSON，请重试`);
@@ -1576,21 +1586,21 @@ function parsePptPart(raw: string, part: 1 | 2): Record<string, unknown> {
   return model;
 }
 
-/** 合并两个 PPT 分段，并统一重排页码。 */
-function mergePptParts(firstRaw: string, secondRaw: string): string {
-  const first = parsePptPart(firstRaw, 1);
-  const second = parsePptPart(secondRaw, 2);
+/** 合并三个 PPT 分段，并统一重排页码。 */
+function mergePptParts(rawParts: readonly string[]): string {
+  const parsed = rawParts.map((raw, index) => parsePptPart(raw, (index + 1) as PptPart));
+  const [first, ...rest] = parsed;
   const slides = [
     ...(first.slides as unknown[]),
-    ...(second.slides as unknown[]),
+    ...rest.flatMap((part) => part.slides as unknown[]),
   ].map((slide, index) => {
     if (!slide || typeof slide !== 'object') return slide;
     return { ...(slide as Record<string, unknown>), index };
   });
   return JSON.stringify({
     ...first,
-    kind: first.kind ?? second.kind ?? 'ppt',
-    meta: first.meta ?? second.meta ?? {},
+    kind: first.kind ?? rest[0]?.kind ?? 'ppt',
+    meta: first.meta ?? rest[0]?.meta ?? {},
     blocks: Array.isArray(first.blocks) ? first.blocks : [],
     slides,
   });
