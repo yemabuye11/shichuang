@@ -354,7 +354,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
       const heartbeat = (): void => {
         try {
-          controller.enqueue(encoder.encode(': keep-alive\n\n'));
+          controller.enqueue(
+            encoder.encode(`event: heartbeat\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`),
+          );
         } catch {
           /* 忽略 */
         }
