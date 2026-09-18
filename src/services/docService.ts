@@ -37,7 +37,11 @@ export async function loadDoc(docId: string): Promise<DocModel | null> {
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
-    return (await res.json()) as DocModel;
+    const model = (await res.json()) as DocModel;
+    return {
+      ...model,
+      version: st.doc_version ?? model.version ?? 1,
+    };
   } catch {
     return null;
   }

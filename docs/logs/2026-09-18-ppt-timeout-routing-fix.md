@@ -1,0 +1,40 @@
+# 2026-09-18 任务日志：修复 PPT 超时与文档误跳应用页
+
+- 日期：2026-09-18
+- 角色：工程师 / QA / 运维
+- 任务：排查线上 PPT 直接生成失败和文档记录打不开的问题，修复生成、查看、编辑、导出闭环。
+- 完成内容：
+  - 从个人中心积分流水确认最近任务失败原因为 `TIMEOUT`，不是积分或账号错误；失败均已退款。
+  - 定位到 PPT 提示词要求 15~18 页并逐页配图，首次生成容易在 130 秒时限内写不完；现在首次生成固定 12 页、最多 10000 tokens，限制为 3 个 chart，优先保证完整 JSON 和可编辑内容。
+  - 文档产物改为先写 Supabase 影子副本，再写主 CDN；主 CDN 临时故障时仍可交付，不再让已经生成成功的文档整体失败。
+  - 修复个人中心、我的应用和广场卡片把 `category='doc'` 文档错误送到 `/app/:id` 的问题，统一进入 `/d/:id`。
+  - 文档预览页增加“导出 / 分享”入口；在线编辑页原有 PPTX、Word 导出能力保持不变。
+  - `serve-app` 对文档优先读取影子副本，并对主存储故障做安全降级，不再返回无说明的 500。
+  - GitHub Actions 增加 `serve-app` 自动部署，避免后续只发布 `generate` 而漏掉回源函数。
+  - 线上真实生成回归后，继续修复两个收尾问题：文档任务先结算再发送 `done`，避免连接关闭后任务被误标为 `TIMEOUT`；重新打开文档时版本角标以数据库 `doc_version` 为准，避免保存 v2 后仍显示 v1。
+- 修改的文件：
+  - `.github/workflows/deploy.yml`
+  - `src/components/square/AppCard.tsx`
+  - `src/pages/DocRunPage.tsx`
+  - `src/pages/MePage.tsx`
+  - `src/pages/MyAppsPage.tsx`
+  - `src/services/docService.ts`
+  - `supabase/functions/generate/index.ts`
+  - `supabase/functions/serve-app/index.ts`
+- 验证：
+  - `npm run typecheck`：通过。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - `npm run build`：通过，仅有既有的大 chunk 警告。
+  - `git diff --check`：通过。
+  - Git 提交并推送：`78973bf fix: stabilize ppt generation and document routing`。
+  - GitHub Actions `35325668841`：前端、`generate`、`serve-app` 均部署成功。
+  - 线上失败草稿的回源接口已由 500 改为可读的 404 降级响应。
+  - 线上真实 PPT 生成：九年级数学《二次函数的图像与性质》第1课时，约 87 秒内完成，正常进入 `/d/6dd59026-c349-4cc5-9eb9-c1d3977145ea`。
+  - 产物结构：共 12 页，含学习目标、概念讲解、2 道例题、易错提醒、课堂小结和分层作业；第 5、6、8 页图表已实际渲染，每页均有讲者备注。
+  - 在线编辑：修改首页标题并保存为 v2 成功。
+  - PPTX 导出：出现“PPTX 已生成，开始下载”成功提示。
+  - 积分流水核对：首次线上成功产物仍出现预扣后 `TIMEOUT` 退还记录，结合代码确认是“先发 done、后结算”的连接关闭竞态，已调整结算顺序。
+- 遗留问题：
+  - 本轮代码推送和线上部署完成后，还需复查 v2 角标及下一笔积分流水是否正常写成成功结算。
+- 下一步：
+  - 运维 / QA：部署本轮修复，复查同一文档 v2 角标和下一笔生成任务的结算状态。

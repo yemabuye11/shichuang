@@ -508,7 +508,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
             appId: string,
             typeCfg: AppTypeCfg,
             perCost: number,
-          ): Promise<{ tokensIn: number; tokensOut: number; costCny: number; ms: number }> {
+          ): Promise<{
+            tokensIn: number;
+            tokensOut: number;
+            costCny: number;
+            ms: number;
+            doneEvent: Record<string, unknown>;
+          }> {
             // 该格式的 apps 草稿行（与单格式逻辑一致：doc_type / credits_cost / 其他字段）。
             const appInsert = await sb.from('apps').insert({
               id: appId,
@@ -749,7 +755,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
               );
             const ms = Date.now() - startedAt;
 
-            send('done', {
+            const doneEvent = {
               jobId,
               appId,
               docId: appId,
@@ -766,9 +772,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
               creditsBalance: balanceAfterReserve,
               model: isMockFlag ? 'mock' : (modelCfg?.id ?? ''),
               promptVersion: composed.promptVersion,
-            });
+            };
 
-            return { tokensIn: usage.promptTokens, tokensOut: usage.completionTokens, costCny, ms };
+            return {
+              tokensIn: usage.promptTokens,
+              tokensOut: usage.completionTokens,
+              costCny,
+              ms,
+              doneEvent,
+            };
           }
 
           // ---- 5/7. 逐个格式生成，结束后一次性结算 ----
@@ -777,12 +789,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
           let totalCny = 0;
           let totalMs = 0;
           let firstDoneAppId = firstAppId;
+          const doneEvents: Record<string, unknown>[] = [];
           for (let i = 0; i < formats.length; i++) {
             const f = formats[i];
             const appId = crypto.randomUUID();
             if (i === 0) firstDoneAppId = appId;
             const typeCfg = await loadAppType(f);
-            const { tokensIn, tokensOut, costCny, ms } = await generateDocFormat(
+            const { tokensIn, tokensOut, costCny, ms, doneEvent } = await generateDocFormat(
               f,
               appId,
               typeCfg,
@@ -792,10 +805,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
             totalOut += tokensOut;
             totalCny += costCny;
             totalMs += ms;
+            doneEvents.push(doneEvent);
           }
-
-          send('stage', { stage: 'code', label: '生成文档内容', status: 'done' });
-          send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
 
           // ---- 7. 单次结算（覆盖所有格式累计 token / 成本）----
           await sb.rpc('settle_generation', {
@@ -807,6 +818,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
             p_app_id: firstDoneAppId,
             p_ms: totalMs,
           });
+
+          send('stage', { stage: 'code', label: '生成文档内容', status: 'done' });
+          send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
+          for (const doneEvent of doneEvents) {
+            send('done', doneEvent);
+          }
 
           void sb
             .from('events')
