@@ -20,13 +20,13 @@
  */
 
 import { handleCors } from '../_shared/cors.ts';
-import { SSE_HEADERS, jsonError } from '../_shared/json.ts';
+import { SSE_HEADERS, jsonError, jsonOk } from '../_shared/json.ts';
 import { AppError, toAppError } from '../_shared/errors.ts';
 import { requireUser, type Caller } from '../_shared/auth.ts';
 import { adminClient, userClient } from '../_shared/supabaseAdmin.ts';
 import { loadAppType, loadConfig, loadModel } from '../_shared/config.ts';
 import { compose, composeDoc, composeRepair } from '../_shared/prompt/compose.ts';
-import { chooseAdapter, isMock } from '../_shared/llm/index.ts';
+import { chooseAdapter, getAdapter, isMock } from '../_shared/llm/index.ts';
 import { buildMockHtml, buildMockDoc } from '../_shared/llm/mock.ts';
 import type { LlmRequest, TokenUsage } from '../_shared/llm/types.ts';
 import { normalizeUsage } from '../_shared/llm/pricing.ts';
@@ -34,6 +34,7 @@ import { getStore, shadowStore } from '../_shared/store/index.ts';
 import { extractTitle, validateHtml } from '../_shared/validateHtml.ts';
 import {
   validateDoc,
+  validatePptPart,
   extractDocJson,
   buildDocRepairPrompt,
   buildDocCompactRepairPrompt,
@@ -58,6 +59,12 @@ const DOC_STREAM_MAX_TIMEOUT_MS = 180_000;
  * 紧凑修复而不是把半份 JSON 当成成功产物交付。
  */
 const PPT_OUTPUT_TOKEN_CAP = 12_000;
+/** 可续跑 PPT：4 个短请求，每个请求由平台连接独立承载。 */
+const PPT_RESUME_TOTAL_PARTS = 4;
+const PPT_RESUME_PART_MAX_OUTPUT = 3_500;
+const PPT_RESUME_PART_TIMEOUT_MS = 115_000;
+const PPT_CHECKPOINT_BUCKET = 'textbooks';
+const PPT_CHECKPOINT_PREFIX = 'ppt-resume';
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
 /**
@@ -299,6 +306,682 @@ interface GenerateBody {
   difficulty?: string;
   modelKey?: string;
   idempotencyKey?: string;
+  /** PPT 可续跑协议：前端按段请求，每段完成后由服务端写检查点。 */
+  pptResumable?: boolean;
+  /** 当前生成的分段序号（1..4）。 */
+  pptPart?: number;
+  /** 全部 4 段完成后，合并、质量校验、存储并结算。 */
+  pptFinalize?: boolean;
+  /** 用户取消或多次重试失败后，退还该 PPT 任务的全部预扣积分。 */
+  pptAbort?: boolean;
+}
+
+interface PptResumeMeta {
+  readonly jobId: string;
+  readonly promptVersion: string;
+  readonly systemPrompt: string;
+  readonly userPrompt: string;
+  readonly modelKey: string;
+  readonly runtimeModelId: string;
+  readonly provider: string;
+  readonly apiBase: string;
+  readonly temperature: number;
+  readonly maxOutputTokens: number;
+  readonly createdAt: string;
+}
+
+interface PptPartCheckpoint {
+  readonly part: number;
+  readonly content: string;
+  readonly finishReason: string;
+  readonly usage: TokenUsage;
+  readonly runtimeModelId: string;
+  readonly createdAt: string;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function pptResumeMetaPath(jobId: string): string {
+  return `${PPT_CHECKPOINT_PREFIX}/${jobId}/meta.json`;
+}
+
+function pptResumePartPath(jobId: string, part: number): string {
+  return `${PPT_CHECKPOINT_PREFIX}/${jobId}/part-${part}.json`;
+}
+
+async function readPptResumeJson<T>(path: string): Promise<T | null> {
+  const { data, error } = await adminClient().storage.from(PPT_CHECKPOINT_BUCKET).download(path);
+  if (error || !data) return null;
+  try {
+    return JSON.parse(await data.text()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function writePptResumeJson(path: string, value: unknown): Promise<void> {
+  const { error } = await adminClient()
+    .storage
+    .from(PPT_CHECKPOINT_BUCKET)
+    .upload(path, new Blob([JSON.stringify(value)], { type: 'application/json; charset=utf-8' }), {
+      contentType: 'application/json; charset=utf-8',
+      cacheControl: '60',
+      upsert: true,
+    });
+  if (error) throw new AppError('STORE_FAILED', `生成检查点保存失败：${error.message}`);
+}
+
+async function removePptResumeFiles(jobId: string, keepMeta = false): Promise<void> {
+  const paths = Array.from({ length: PPT_RESUME_TOTAL_PARTS }, (_, index) =>
+    pptResumePartPath(jobId, index + 1));
+  if (!keepMeta) paths.push(pptResumeMetaPath(jobId));
+  await adminClient().storage.from(PPT_CHECKPOINT_BUCKET).remove(paths);
+}
+
+interface PptResumeJobRow {
+  id: string;
+  user_id: string;
+  app_id: string | null;
+  status: string;
+  reserved_credits: number | null;
+  model: string | null;
+  prompt_version: string | null;
+  started_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+}
+
+async function loadPptResumeJob(jobId: string, userId: string): Promise<PptResumeJobRow | null> {
+  const { data, error } = await adminClient()
+    .from('generation_jobs')
+    .select('id,user_id,app_id,status,reserved_credits,model,prompt_version,started_at,error_code,error_message')
+    .eq('id', jobId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw new AppError('STORE_FAILED', `生成任务读取失败：${error.message}`);
+  return (data ?? null) as PptResumeJobRow | null;
+}
+
+async function currentCreditBalance(userId: string): Promise<number> {
+  const { data } = await adminClient()
+    .from('credit_accounts')
+    .select('balance')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return Number(data?.balance ?? 0);
+}
+
+/**
+ * 取消一个可续跑 PPT 任务并退还整项预扣积分。
+ *
+ * 分段请求失败时服务端先保留 running 状态让前端自动重试，只有前端确认
+ * 已超过重试上限后才调用这里，避免一次网络抖动就退款并终止整份课件。
+ */
+async function abortPptResumableJob(caller: Caller, body: GenerateBody): Promise<Response> {
+  const jobId = (body.idempotencyKey ?? '').trim();
+  if (!isUuid(jobId)) {
+    return jsonError(422, { code: 'VALIDATE_FAILED', message: '生成任务标识无效' });
+  }
+
+  const job = await loadPptResumeJob(jobId, caller.userId);
+  if (!job) return jsonOk({ ok: true, refunded: false, balance: await currentCreditBalance(caller.userId) });
+  if (job.status !== 'running') {
+    return jsonOk({
+      ok: true,
+      refunded: false,
+      balance: await currentCreditBalance(caller.userId),
+      status: job.status,
+    });
+  }
+
+  const { data, error } = await adminClient().rpc('refund_generation', {
+    p_job_id: jobId,
+    p_error_code: 'CANCELLED',
+    p_error_message: 'PPT 分段生成多次未完成，系统自动停止并退款',
+  });
+  if (error) return jsonError(500, { code: 'STORE_FAILED', message: `退款失败：${error.message}` });
+  await removePptResumeFiles(jobId);
+  const raw = (data ?? {}) as { refunded?: boolean; balance?: number };
+  return jsonOk({
+    ok: true,
+    refunded: raw.refunded === true,
+    balance: Number(raw.balance ?? 0),
+  });
+}
+
+/**
+ * 可续跑 PPT 的 SSE 处理器。
+ *
+ * 每段是一个独立 Edge 请求，完成后先写 Storage 再发 checkpoint。前端即使
+ * 在代理切断后重试，也会先命中已有检查点，不会因为平台 150 秒上限丢掉前面内容。
+ */
+function createPptResumableResponse(
+  caller: Caller,
+  body: GenerateBody,
+  prompt: string,
+): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let heartbeatTimer: number | undefined;
+      let settled = false;
+      let currentStage = 'starting';
+      const jobId = (body.idempotencyKey ?? '').trim();
+
+      const send = (event: string, data: unknown): void => {
+        if (event === 'stage' && data && typeof data === 'object' && 'stage' in data) {
+          currentStage = String((data as { stage?: unknown }).stage ?? currentStage);
+        }
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          /* 流已关闭 */
+        }
+      };
+
+      const close = (): void => {
+        if (settled) return;
+        settled = true;
+        try {
+          controller.close();
+        } catch {
+          /* 已关闭 */
+        }
+      };
+
+      const fail = (err: unknown, refunded = false, balance = 0): void => {
+        const appErr = toAppError(err);
+        if (!refunded) {
+          console.warn(`[generate:ppt-resume] part failed job=${jobId} stage=${currentStage}: ${appErr.message}`);
+        }
+        send('error', {
+          code: appErr.code,
+          message: appErr.message,
+          refunded,
+          creditsBalance: balance,
+          retryable: appErr.retryable,
+          jobId: jobId || undefined,
+          stage: currentStage,
+        });
+        close();
+      };
+
+      try {
+        heartbeatTimer = setInterval(() => {
+          send('heartbeat', { at: Date.now() });
+        }, HEARTBEAT_MS);
+
+        if (!isUuid(jobId)) {
+          throw new AppError('VALIDATE_FAILED', '生成任务标识无效，请重新发起生成');
+        }
+
+        const sb = adminClient();
+        const userSb = userClient(caller.token);
+        let job = await loadPptResumeJob(jobId, caller.userId);
+
+        // 第一次分段请求：检查额度、预扣一次积分、创建任务和 PPT 草稿。
+        if (!job) {
+          await assertUnderMonthlyCap();
+          await recoverStaleRunningJobs(caller.userId);
+          const allowed = await userSb.rpc('check_generation_allowed');
+          const allowedRaw = (allowed.data ?? {}) as { allowed?: boolean; code?: string; message?: string };
+          if (allowedRaw.allowed === false) {
+            throw new AppError(
+              (allowedRaw.code ?? 'DAILY_LIMIT') as AppError['code'],
+              allowedRaw.message ?? '暂时无法生成，请稍后再试',
+              { retryable: false, refundable: false },
+            );
+          }
+
+          const typeCfg = await loadAppType('ppt');
+          const preferredKey = body.modelKey || typeCfg?.modelOverride || undefined;
+          const modelCfg = await loadModel(preferredKey);
+          const creditCost = typeCfg?.creditCost ?? 1;
+          const reserve = await userSb.rpc('reserve_credits', {
+            p_amount: creditCost,
+            p_job_id: jobId,
+            p_app_type: 'ppt',
+            p_model: modelCfg?.id ?? '',
+          });
+          readReserveBalance(reserve);
+
+          const jobInsert = await sb.from('generation_jobs').insert({
+            id: jobId,
+            user_id: caller.userId,
+            app_id: null,
+            app_type: 'ppt',
+            model: modelCfg?.id ?? '',
+            status: 'running',
+            reserved_credits: creditCost,
+            idempotency_key: jobId,
+          });
+          if (jobInsert.error) {
+            await refundOrphanReserve({
+              userId: caller.userId,
+              jobId,
+              amount: creditCost,
+              errorCode: 'STORE_FAILED',
+              errorMessage: `PPT 生成任务创建失败：${jobInsert.error.message}`,
+            });
+            throw new AppError('STORE_FAILED', `PPT 生成任务创建失败：${jobInsert.error.message}`);
+          }
+
+          const appId = crypto.randomUUID();
+          const appInsert = await sb.from('apps').insert({
+            id: appId,
+            author_id: caller.userId,
+            title: prompt.slice(0, 40),
+            prompt_raw: prompt,
+            app_type: 'ppt',
+            category: 'doc',
+            doc_type: 'ppt',
+            subject: body.subject ?? '',
+            grade: body.grade ?? '',
+            textbook: body.textbook ?? '',
+            duration: body.duration ?? '',
+            difficulty: body.difficulty ?? '',
+            textbook_version_id: body.textbookVersionId ?? null,
+            status: 'draft',
+            html_status: 'pending',
+            credits_cost: creditCost,
+          });
+          if (appInsert.error) {
+            throw new AppError('STORE_FAILED', `PPT 草稿保存失败：${appInsert.error.message}`);
+          }
+          const attach = await sb
+            .from('generation_jobs')
+            .update({ app_id: appId })
+            .eq('id', jobId);
+          if (attach.error) throw new AppError('STORE_FAILED', `PPT 任务关联失败：${attach.error.message}`);
+          job = await loadPptResumeJob(jobId, caller.userId);
+        }
+
+        if (!job) throw new AppError('STORE_FAILED', 'PPT 生成任务创建后未能读取');
+        if (job.status !== 'running') {
+          if (job.status === 'succeeded' && job.app_id) {
+            const html = await shadowStore.getDocHtml(job.app_id, 1);
+            const { data: appRow } = await sb
+              .from('apps')
+              .select('id,title,html_url,html_status,doc_json_url,tokens_in,tokens_out,model')
+              .eq('id', job.app_id)
+              .maybeSingle();
+            if (html && appRow) {
+              send('checkpoint', {
+                jobId,
+                part: PPT_RESUME_TOTAL_PARTS,
+                totalParts: PPT_RESUME_TOTAL_PARTS,
+                resumed: true,
+                final: true,
+              });
+              send('done', {
+                jobId,
+                appId: job.app_id,
+                docId: job.app_id,
+                category: 'doc',
+                docType: 'ppt',
+                title: appRow.title || prompt.slice(0, 30),
+                summary: prompt.slice(0, 60),
+                html,
+                renderUrl: appRow.html_url ?? '',
+                docJsonUrl: appRow.doc_json_url ?? '',
+                htmlStatus: appRow.html_status ?? 'ready',
+                tokensIn: Number(appRow.tokens_in ?? job.tokens_in ?? 0),
+                tokensOut: Number(appRow.tokens_out ?? job.tokens_out ?? 0),
+                creditsCost: Number(job.reserved_credits ?? 0),
+                creditsBalance: await currentCreditBalance(caller.userId),
+                model: appRow.model ?? job.model ?? '',
+                promptVersion: job.prompt_version ?? '',
+              });
+              close();
+              return;
+            }
+          }
+          throw new AppError(
+            job.status === 'succeeded' ? 'VALIDATE_FAILED' : 'TIMEOUT',
+            job.status === 'succeeded'
+              ? '这份 PPT 已经生成完成，请回到文档页查看'
+              : (job.error_message || 'PPT 分段任务已结束，请重新发起生成'),
+            { retryable: job.status !== 'succeeded', refundable: false },
+          );
+        }
+        if (!job.app_id) throw new AppError('STORE_FAILED', 'PPT 草稿不存在，请重新发起生成');
+
+        let meta = await readPptResumeJson<PptResumeMeta>(pptResumeMetaPath(jobId));
+        if (!meta) {
+          send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
+          let textbookContext = body.textbookContext ?? '';
+          if (body.textbookVersionId) {
+            send('stage', { stage: 'textbook_search', label: '检索教材内容', status: 'running' });
+            try {
+              const resolved = await resolveTextbookContext({
+                versionId: body.textbookVersionId,
+                chapter: body.textbookContext,
+                sb,
+              });
+              textbookContext = resolved.context || textbookContext;
+            } catch (searchErr) {
+              console.warn('[generate:ppt-resume] 教材检索兜底：', searchErr);
+            }
+            send('stage', { stage: 'textbook_search', label: '检索教材内容', status: 'done' });
+          }
+
+          const typeCfg = await loadAppType('ppt');
+          const composed = await composeDoc({
+            docType: 'ppt',
+            promptKey: typeCfg?.promptKey ?? '',
+            prompt,
+            subject: body.subject,
+            grade: body.grade,
+            textbook: body.textbook,
+            duration: body.duration,
+            difficulty: body.difficulty,
+            textbookContext,
+            templateContent: body.templateContent,
+            referenceTitle: body.referenceTitle,
+            referenceSource: body.referenceSource,
+          });
+          const preferredKey = body.modelKey || typeCfg?.modelOverride || undefined;
+          const modelCfg = await loadModel(preferredKey);
+          const { adapter, provider } = chooseAdapter(modelCfg?.provider);
+          const selectedApiBase = provider === modelCfg?.provider ? (modelCfg?.apiBase ?? '') : '';
+          const cfg = await loadConfig();
+          const maxOutput = Number(cfg.limit.maxOutputTokens ?? modelCfg?.maxOutputTokens ?? 8000);
+          meta = {
+            jobId,
+            promptVersion: composed.promptVersion,
+            systemPrompt: composed.systemPrompt,
+            userPrompt: withDocOutputBudget(composed.userPrompt, 'ppt'),
+            modelKey: modelCfg?.id ?? '',
+            runtimeModelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
+            provider,
+            apiBase: selectedApiBase,
+            temperature: 0.35,
+            maxOutputTokens: Math.min(maxOutput, PPT_RESUME_PART_MAX_OUTPUT),
+            createdAt: new Date().toISOString(),
+          };
+          await writePptResumeJson(pptResumeMetaPath(jobId), meta);
+          await sb
+            .from('generation_jobs')
+            .update({ prompt_version: composed.promptVersion, model: modelCfg?.id ?? '' })
+            .eq('id', jobId);
+          send('stage', { stage: 'understand', label: '理解教学需求', status: 'done' });
+          send('stage', { stage: 'design', label: '设计文档结构', status: 'done' });
+        }
+
+        if (body.pptFinalize === true) {
+          send('stage', { stage: 'verify', label: '合并并检查整份课件', status: 'running' });
+          const checkpoints = await Promise.all(
+            Array.from({ length: PPT_RESUME_TOTAL_PARTS }, (_, index) =>
+              readPptResumeJson<PptPartCheckpoint>(pptResumePartPath(jobId, index + 1))),
+          );
+          const missing = checkpoints
+            .map((checkpoint, index) => checkpoint ? 0 : index + 1)
+            .filter(Boolean);
+          if (missing.length > 0) {
+            throw new AppError(
+              'VALIDATE_FAILED',
+              `第 ${missing.join('、')} 段尚未完成，系统会继续补跑`,
+              { retryable: true, refundable: false },
+            );
+          }
+
+          const parts = checkpoints as PptPartCheckpoint[];
+          const mergedRaw = mergePptParts(parts.map((part) => part.content));
+          const merged = validateDoc(mergedRaw, MAX_DOC_BYTES);
+          if (!merged.ok || !merged.model) {
+            console.warn(
+              `[generate:ppt-resume] 合并质量校验失败 job=${jobId}: ${merged.errors.slice(0, 8).join(' | ')}`,
+            );
+            await removePptResumeFiles(jobId, true);
+            throw new AppError(
+              'VALIDATE_FAILED',
+              '这份课件的分段质量未达课堂标准，系统正在自动重新生成',
+              { retryable: true, refundable: false },
+            );
+          }
+
+          const generatedAt = new Date().toISOString();
+          const finalModel: DocModel = {
+            ...merged.model,
+            id: job.app_id,
+            version: 1,
+            createdAt: merged.model.createdAt ?? generatedAt,
+          };
+          const json = JSON.stringify(finalModel);
+          const html = renderDoc(finalModel);
+          const [shadowJson, shadowHtml] = await Promise.all([
+            shadowStore.putDocJson(job.app_id, 1, json),
+            shadowStore.putDocHtml(job.app_id, 1, html),
+          ]);
+
+          let putJson = shadowJson;
+          let putHtml = shadowHtml;
+          try {
+            const store = await getStore();
+            [putJson, putHtml] = await Promise.all([
+              store.putDocJson(job.app_id, 1, json),
+              store.putDocHtml(job.app_id, 1, html),
+            ]);
+            const cfg = await loadConfig();
+            if (cfg.artifact.warmup) void store.warmup(putHtml.url);
+          } catch (storeErr) {
+            console.warn('[generate:ppt-resume] 主存储失败，继续使用影子副本：', storeErr);
+            putJson = shadowJson;
+            putHtml = shadowHtml;
+          }
+
+          const title = finalModel.meta?.title || prompt.slice(0, 30);
+          const update = await sb
+            .from('apps')
+            .update({
+              title,
+              category: 'doc',
+              doc_type: 'ppt',
+              doc_json_url: putJson.url,
+              doc_version: 1,
+              verify_status: finalModel.verifyHints && finalModel.verifyHints.length > 0 ? 'partial' : 'pending',
+              html_url: putHtml.url,
+              html_status: putHtml.readyNow ? 'ready' : 'pending',
+              html_size_bytes: putHtml.sizeBytes,
+              html_sha256: putHtml.sha256,
+              html_version: 1,
+              model: meta.modelKey || meta.runtimeModelId,
+              tokens_in: parts.reduce((sum, part) => sum + (part.usage.promptTokens ?? 0), 0),
+              tokens_out: parts.reduce((sum, part) => sum + (part.usage.completionTokens ?? 0), 0),
+              generation_ms: job.started_at ? Date.now() - new Date(job.started_at).getTime() : 0,
+              cover_seed: putHtml.sha256.slice(0, 16),
+            })
+            .eq('id', job.app_id);
+          if (update.error) throw new AppError('STORE_FAILED', `PPT 结果保存失败：${update.error.message}`);
+
+          let callerNickname = '';
+          try {
+            const { data: prof } = await sb
+              .from('profiles')
+              .select('nickname')
+              .eq('id', caller.userId)
+              .single();
+            callerNickname = prof?.nickname ?? '';
+          } catch {
+            callerNickname = '';
+          }
+          let downloadCredits = 0;
+          try {
+            const { data: costProf } = await sb
+              .from('app_type_profiles')
+              .select('credit_cost')
+              .eq('app_type', 'ppt')
+              .single();
+            downloadCredits = Number(costProf?.credit_cost ?? 0);
+          } catch {
+            downloadCredits = 0;
+          }
+          void sb
+            .rpc('deposit_doc_library', {
+              p_doc_id: job.app_id,
+              p_owner_id: caller.userId,
+              p_category: 'doc',
+              p_doc_type: 'ppt',
+              p_subject: finalModel.meta?.subject ?? body.subject ?? '',
+              p_grade: finalModel.meta?.grade ?? body.grade ?? '',
+              p_textbook_version_id: body.textbookVersionId ?? null,
+              p_keywords: deriveKeywords(finalModel, 'ppt', body),
+              p_is_public: body.publishToLibrary ?? false,
+              p_owner_nickname: callerNickname,
+              p_title: title,
+              p_download_credits: downloadCredits,
+            })
+            .then(() => undefined)
+            .catch(() => undefined);
+
+          const usage: TokenUsage = {
+            promptTokens: parts.reduce((sum, part) => sum + (part.usage.promptTokens ?? 0), 0),
+            completionTokens: parts.reduce((sum, part) => sum + (part.usage.completionTokens ?? 0), 0),
+            cachedTokens: parts.reduce((sum, part) => sum + (part.usage.cachedTokens ?? 0), 0),
+            estimated: parts.some((part) => part.usage.estimated ?? true),
+          };
+          const modelCfg = await loadModel(meta.modelKey || undefined);
+          const costCny = costOf(
+            usage,
+            modelCfg?.pricing ?? { input: 1.5, cachedInput: 0.05, output: 4.5, peakMultiplier: 2 },
+            job.started_at ? new Date(job.started_at) : new Date(),
+          );
+          const settle = await sb.rpc('settle_generation', {
+            p_job_id: jobId,
+            p_tokens_in: usage.promptTokens,
+            p_tokens_out: usage.completionTokens,
+            p_cost_cny: costCny,
+            p_model: meta.modelKey || meta.runtimeModelId,
+            p_app_id: job.app_id,
+            p_ms: job.started_at ? Date.now() - new Date(job.started_at).getTime() : 0,
+          });
+          if (settle.error) throw new AppError('STORE_FAILED', `PPT 结算失败：${settle.error.message}`);
+
+          send('stage', { stage: 'code', label: '生成文档内容', status: 'done' });
+          send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
+          send('checkpoint', {
+            jobId,
+            part: PPT_RESUME_TOTAL_PARTS,
+            totalParts: PPT_RESUME_TOTAL_PARTS,
+            final: true,
+          });
+          send('done', {
+            jobId,
+            appId: job.app_id,
+            docId: job.app_id,
+            category: 'doc',
+            docType: 'ppt',
+            title,
+            summary: prompt.slice(0, 60),
+            html,
+            renderUrl: putHtml.url,
+            docJsonUrl: putJson.url,
+            htmlStatus: putHtml.readyNow ? 'ready' : 'pending',
+            tokensIn: usage.promptTokens,
+            tokensOut: usage.completionTokens,
+            creditsCost: Number(job.reserved_credits ?? 0),
+            creditsBalance: await currentCreditBalance(caller.userId),
+            model: meta.modelKey || meta.runtimeModelId,
+            promptVersion: meta.promptVersion,
+          });
+          await removePptResumeFiles(jobId);
+          void sb
+            .from('events')
+            .insert({
+              name: 'generate_doc_success',
+              user_id: caller.userId,
+              app_id: job.app_id,
+              props: {
+                docType: 'ppt',
+                model: meta.modelKey || meta.runtimeModelId,
+                period: currentPeriod(),
+                resumable: true,
+                parts: PPT_RESUME_TOTAL_PARTS,
+              },
+            })
+            .then(() => undefined)
+            .catch(() => undefined);
+          close();
+          return;
+        }
+
+        const part = Number(body.pptPart ?? 1);
+        if (!Number.isInteger(part) || part < 1 || part > PPT_RESUME_TOTAL_PARTS) {
+          throw new AppError('VALIDATE_FAILED', 'PPT 分段序号无效，请重新发起生成');
+        }
+
+        const checkpointPath = pptResumePartPath(jobId, part);
+        const existing = await readPptResumeJson<PptPartCheckpoint>(checkpointPath);
+        if (existing) {
+          send('checkpoint', {
+            jobId,
+            part,
+            totalParts: PPT_RESUME_TOTAL_PARTS,
+            resumed: true,
+          });
+          close();
+          return;
+        }
+
+        send('stage', {
+          stage: 'code',
+          label: `生成第 ${part}/${PPT_RESUME_TOTAL_PARTS} 段`,
+          status: 'running',
+        });
+        const adapter = getAdapter(meta.provider);
+        const partResult = await callDocStreaming(
+          adapter,
+          {
+            systemPrompt: meta.systemPrompt,
+            userPrompt: withPptPartBudget(meta.userPrompt, part as PptPart),
+            maxOutputTokens: meta.maxOutputTokens,
+            temperature: meta.temperature,
+          },
+          {
+            modelId: meta.runtimeModelId,
+            apiBase: meta.apiBase,
+            maxOutputTokens: meta.maxOutputTokens,
+            totalTimeoutMs: PPT_RESUME_PART_TIMEOUT_MS,
+          },
+          (text) => send('delta', { text }),
+        );
+        const partValidation = validatePptPart(partResult.content, part, MAX_DOC_BYTES);
+        if (!partValidation.ok || !partValidation.model) {
+          throw new AppError(
+            'VALIDATE_FAILED',
+            `第 ${part} 段内容不完整，系统会自动重新生成这一段`,
+            { retryable: true, refundable: false },
+          );
+        }
+        const usage = partResult.usage ??
+          normalizeUsage(null, partResult.content, `${meta.systemPrompt}\n${meta.userPrompt}`);
+        const checkpoint: PptPartCheckpoint = {
+          part,
+          content: partResult.content,
+          finishReason: partResult.finishReason,
+          usage,
+          runtimeModelId: meta.runtimeModelId,
+          createdAt: new Date().toISOString(),
+        };
+        await writePptResumeJson(checkpointPath, checkpoint);
+        send('checkpoint', {
+          jobId,
+          part,
+          totalParts: PPT_RESUME_TOTAL_PARTS,
+        });
+        close();
+      } catch (err) {
+        fail(err);
+      } finally {
+        if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
+        close();
+      }
+    },
+  });
+
+  return new Response(stream, { headers: SSE_HEADERS });
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -330,6 +1013,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // 详见 docs/QUALITY_BASELINE.md ③ 问题 1：不拦的话会退化成"压缩成提纲却正常扣费"。
   if (category === 'doc' && isOutOfScopePrompt(prompt)) {
     return jsonError(422, { code: 'VALIDATE_FAILED', message: OUT_OF_SCOPE_MESSAGE });
+  }
+
+  if (category === 'doc' && body.pptResumable === true) {
+    if (body.pptAbort === true) {
+      return await abortPptResumableJob(caller, body);
+    }
+    return createPptResumableResponse(caller, body, prompt);
   }
 
   const encoder = new TextEncoder();
@@ -623,51 +1313,30 @@ Deno.serve(async (req: Request): Promise<Response> => {
               }
               usage = normalizeUsage(null, docJson, composed.systemPrompt + composed.userPrompt);
             } else if (f === 'ppt') {
-              // 18 页拆成三个并行 JSON：每段约 4k token，单段完成即等待合并。
-              // 第一段持续给教师可见的实时进度，后两段在后台并行生成。
-              const partMaxOutput = Math.min(docMaxOutput, 4_500);
+              // 18 页拆成四个并行 JSON：每段 4~5 页，单段更短，降低任一供应商
+              // 在 150 秒网关窗口内被截断的概率。第一段持续给教师可见的实时进度。
+              const partMaxOutput = Math.min(docMaxOutput, PPT_RESUME_PART_MAX_OUTPUT);
               const modelId = resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId);
               const partContext = {
                 modelId,
                 apiBase: selectedApiBase,
                 maxOutputTokens: partMaxOutput,
-                totalTimeoutMs: 160_000,
+                totalTimeoutMs: PPT_RESUME_PART_TIMEOUT_MS,
               };
-              const parts = await Promise.all([
-                callDocStreaming(
-                  adapter,
-                  {
-                    systemPrompt: composed.systemPrompt,
-                    userPrompt: withPptPartBudget(budgetedUserPrompt, 1),
-                    maxOutputTokens: partMaxOutput,
-                    temperature: docTemperature,
-                  },
-                  partContext,
-                  (text) => send('delta', { text }),
-                ),
-                callDocStreaming(
-                  adapter,
-                  {
-                    systemPrompt: composed.systemPrompt,
-                    userPrompt: withPptPartBudget(budgetedUserPrompt, 2),
-                    maxOutputTokens: partMaxOutput,
-                    temperature: docTemperature,
-                  },
-                  partContext,
-                  () => undefined,
-                ),
-                callDocStreaming(
-                  adapter,
-                  {
-                    systemPrompt: composed.systemPrompt,
-                    userPrompt: withPptPartBudget(budgetedUserPrompt, 3),
-                    maxOutputTokens: partMaxOutput,
-                    temperature: docTemperature,
-                  },
-                  partContext,
-                  () => undefined,
-                ),
-              ]);
+              const parts = await Promise.all(
+                ([1, 2, 3, 4] as PptPart[]).map((part) =>
+                  callDocStreaming(
+                    adapter,
+                    {
+                      systemPrompt: composed.systemPrompt,
+                      userPrompt: withPptPartBudget(budgetedUserPrompt, part),
+                      maxOutputTokens: partMaxOutput,
+                      temperature: docTemperature,
+                    },
+                    partContext,
+                    part === 1 ? (text) => send('delta', { text }) : () => undefined,
+                  )),
+              );
               raw = mergePptParts(parts.map((part) => part.content));
               finishReason = parts.map((part) => part.finishReason).find(Boolean) ?? '';
               usage = normalizeUsage(
@@ -1514,13 +2183,13 @@ function withDocOutputBudget(userPrompt: string, docType: string): string {
 }
 
 /**
- * 给 18 页 PPT 的两个并行分段追加边界。
+ * 给 18 页 PPT 的四个分段追加边界。
  *
  * 单次生成 18 页时，上游即使能用也会在 130 秒窗口内被截断。这里把同一课时拆成
- * 前后两个完整 JSON，再由服务端合并后统一跑质量门禁，既保留课堂流程，也避免
+ * 四个完整 JSON，再由服务端合并后统一跑质量门禁，既保留课堂流程，也避免
  * 把超时风险转嫁给教师。
  */
-type PptPart = 1 | 2 | 3;
+type PptPart = 1 | 2 | 3 | 4;
 
 function withPptPartBudget(userPrompt: string, part: PptPart): string {
   const first = [
@@ -1529,39 +2198,44 @@ function withPptPartBudget(userPrompt: string, part: PptPart): string {
     '3. 情境导入',
     '4. 初读任务',
     '5. 字词 / 概念理解',
-    '6. 知识讲解 1',
   ];
   const second = [
+    '6. 知识讲解 1',
     '7. 知识讲解 2',
     '8. 例题示范',
     '9. 跟着做 / 课堂活动',
     '10. 易错提醒',
-    '11. 基础练习',
-    '12. 提高练习',
   ];
   const third = [
+    '11. 基础练习',
+    '12. 提高练习',
     '13. 迁移应用',
     '14. 课堂讨论',
+  ];
+  const fourth = [
     '15. 方法归纳',
     '16. 课堂小结',
     '17. 分层作业',
     '18. 教师核对与课上机动提示',
   ];
-  const pages = part === 1 ? first : part === 2 ? second : third;
-  const range = part === 1 ? '第 1~6 页' : part === 2 ? '第 7~12 页' : '第 13~18 页';
+  const pages = part === 1 ? first : part === 2 ? second : part === 3 ? third : fourth;
+  const range = part === 1
+    ? '第 1~5 页'
+    : part === 2
+      ? '第 6~10 页'
+      : part === 3
+        ? '第 11~14 页'
+        : '第 15~18 页';
+  const expected = part === 1 || part === 2 ? 5 : 4;
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
     `这是完整 18 页课件的第 ${part} 段。你只输出 ${range}，` +
     '不要输出另一段，也不要重复封面或目录。\n' +
-    `本段必须正好 6 页，固定顺序：${pages.join('；')}。\n` +
-    '仍然输出完整 DocModel JSON：保留 kind、meta、blocks、slides、version；slides 只放本段 6 页。\n' +
+    `本段必须正好 ${expected} 页，固定顺序：${pages.join('；')}。\n` +
+    '仍然输出完整 DocModel JSON：保留 kind、meta、blocks、slides、version；slides 只放本段页面。\n' +
     '每页保留 2~3 个正文块，notes 写 45~90 字可直接照读的话，并包含追问或学生易错点。\n' +
-    (part === 1
-      ? '本段至少 1 个短数据 chart，优先放在初读任务或知识讲解页。\n'
-      : part === 2
-        ? '本段至少 1 个短数据 chart，优先放在例题、活动或练习页。\n'
-        : '本段至少 1 个短数据 chart，优先放在迁移、讨论、方法归纳或小结页。\n') +
+    '本段必须至少 1 个短数据 chart，charts 的 categories / values 各不超过 5 项。\n' +
     '禁止输出 data:image/svg+xml、外链图片或长 SVG；图表数据保持简短。\n' +
     '只输出一个完整 JSON 对象，不要解释，不要输出代码块以外的文字。'
   );

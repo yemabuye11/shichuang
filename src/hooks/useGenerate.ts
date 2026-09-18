@@ -188,6 +188,25 @@ function handleEvent(event: GenEvent): void {
     case 'heartbeat':
       // 心跳只用于保活，不改变状态
       break;
+    case 'checkpoint': {
+      // PPT 分段续跑：每段完成先更新可见进度，整份 done 到达前不结束任务。
+      const stages = snapshot.stages.map((s) =>
+        s.stage === 'code'
+          ? {
+              ...s,
+              label: event.data.final
+                ? '整份课件已合并'
+                : `已完成第 ${event.data.part}/${event.data.totalParts} 段`,
+              status: (event.data.final ? 'done' : 'running') as StageState['status'],
+            }
+          : s,
+      );
+      patch({
+        stages,
+        status: event.data.final ? 'storing' : 'streaming',
+      });
+      break;
+    }
     case 'done': {
       terminalEventReceived = true;
       removeRequest(snapshot.jobId);
@@ -359,7 +378,10 @@ export function isGenerating(): boolean {
  */
 export function estimateRemainingMs(snap: GenerateSnapshot): number {
   if (snap.status === 'done') return 0;
-  const target = 45_000;
+  const target =
+    snap.request?.category === 'doc' && snap.request.docType === 'ppt'
+      ? 180_000
+      : 45_000;
   const remaining = target - snap.elapsedMs;
   return remaining > 0 ? remaining : 3_000;
 }

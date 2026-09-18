@@ -1,4 +1,5 @@
 import { getSupabase } from './supabaseClient';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { AppError } from './http/errors';
 import { mockGenerate } from './mock/mockGenerate';
 import { isMockMode } from '@/config/env';
@@ -195,6 +196,11 @@ async function runRemote(
   // 使用 Supabase 官方 FunctionsClient：它会在专用 fetch 中注入 apikey 和当前 JWT，
   // 也能保留 text/event-stream 响应体供前端逐帧解析。
   sb.functions.setAuth(token);
+  if (isResumablePptRequest(req)) {
+    await runRemotePptResumable(req, handlers, controller, sb);
+    return;
+  }
+
   const invoke = () =>
     sb.functions.invoke<unknown>('generate', {
       body: req,
@@ -233,6 +239,272 @@ async function runRemote(
   const res = result.data as Response;
   if (!res.body) throw new AppError('NETWORK', '生成服务没有返回有效内容');
   await parseSse(res.body, handlers.onEvent);
+}
+
+const PPT_RESUME_PARTS = 4;
+const PPT_PART_CLIENT_TIMEOUT_MS = 138_000;
+const PPT_PART_MAX_ATTEMPTS = 3;
+const PPT_FULL_MAX_CYCLES = 2;
+
+/** 只有单独生成 PPT 时启用跨请求续跑；多格式仍保持原有一体化链路。 */
+function isResumablePptRequest(req: GenerateRequest): boolean {
+  if (req.category !== 'doc') return false;
+  const formats = Array.isArray(req.docTypes) && req.docTypes.length > 0
+    ? req.docTypes
+    : req.docType
+      ? [req.docType]
+      : [];
+  return formats.length === 1 && formats[0] === 'ppt';
+}
+
+interface RemoteCallOutcome {
+  done: boolean;
+  checkpoint: boolean;
+  error: ErrorEvent | null;
+}
+
+/**
+ * PPT 跨请求续跑。
+ *
+ * 每个分段请求都由 Edge 平台独立计时，前一段的 JSON 已写入服务端检查点；
+ * 网络被网关切断时只重试当前段，不会丢掉已经生成好的页面。四段全部完成后
+ * 再单独发一个最终请求做合并、质量门禁、存储和结算。
+ */
+async function runRemotePptResumable(
+  req: GenerateRequest,
+  handlers: GenerateHandlers,
+  controller: AbortController,
+  sb: SupabaseClient,
+): Promise<void> {
+  let lastError: ErrorEvent | null = null;
+
+  const invokeResumable = async (
+    body: GenerateRequest,
+    signal: AbortSignal,
+  ): Promise<RemoteCallOutcome> => {
+    const result = await sb.functions.invoke<unknown>('generate', {
+      body,
+      headers: { Accept: 'text/event-stream' },
+      signal,
+    });
+
+    if (result.error || !result.data) {
+      const res = result.response;
+      const payload = res ? await safeJson(res) : null;
+      return {
+        done: false,
+        checkpoint: false,
+        error: {
+          code: (payload?.code as GenerateErrorCode) ?? 'NETWORK',
+          message: payload?.message ?? '生成连接中断，系统正在自动续跑',
+          refunded: payload?.refunded ?? false,
+          creditsBalance: payload?.creditsBalance ?? 0,
+          retryable: payload?.retryable ?? true,
+        },
+      };
+    }
+
+    const res = result.data as Response;
+    if (!res.body) {
+      return {
+        done: false,
+        checkpoint: false,
+        error: {
+          code: 'NETWORK',
+          message: '生成连接没有返回内容，系统正在自动续跑',
+          refunded: false,
+          creditsBalance: 0,
+          retryable: true,
+        },
+      };
+    }
+
+    const outcome: RemoteCallOutcome = { done: false, checkpoint: false, error: null };
+    await parseSse(res.body, (event) => {
+      if (event.type === 'error') {
+        outcome.error = event.data;
+        return;
+      }
+      if (event.type === 'checkpoint') {
+        outcome.checkpoint = true;
+        handlers.onEvent(event);
+        return;
+      }
+      if (event.type === 'done') {
+        outcome.done = true;
+        handlers.onEvent(event);
+        return;
+      }
+      handlers.onEvent(event);
+    });
+    return outcome;
+  };
+
+  const callWithRetry = async (
+    body: GenerateRequest,
+    retryValidationFailure = true,
+  ): Promise<RemoteCallOutcome> => {
+    let outcome: RemoteCallOutcome | null = null;
+    for (let attempt = 1; attempt <= PPT_PART_MAX_ATTEMPTS; attempt += 1) {
+      if (controller.signal.aborted) {
+        throw new DOMException('Generation cancelled', 'AbortError');
+      }
+      const callController = new AbortController();
+      const abortCall = (): void => callController.abort();
+      controller.signal.addEventListener('abort', abortCall, { once: true });
+      const timeout = setTimeout(() => callController.abort(), PPT_PART_CLIENT_TIMEOUT_MS);
+      try {
+        outcome = await invokeResumable(body, callController.signal);
+      } catch (err) {
+        if (controller.signal.aborted) throw err;
+        const message = err instanceof Error ? err.message : '生成连接中断';
+        outcome = {
+          done: false,
+          checkpoint: false,
+          error: {
+            code: 'NETWORK',
+            message: `${message}，系统正在自动续跑`,
+            refunded: false,
+            creditsBalance: 0,
+            retryable: true,
+          },
+        };
+      } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener('abort', abortCall);
+      }
+
+      lastError = outcome.error;
+      if (outcome.done || outcome.checkpoint) return outcome;
+      if (outcome.error && !outcome.error.retryable) return outcome;
+      if (
+        !retryValidationFailure &&
+        outcome.error?.code === 'VALIDATE_FAILED'
+      ) {
+        return outcome;
+      }
+      if (attempt < PPT_PART_MAX_ATTEMPTS) {
+        await waitForRetry(controller.signal, attempt * 1_200);
+      }
+    }
+    return outcome ?? {
+      done: false,
+      checkpoint: false,
+      error: lastError ?? {
+        code: 'NETWORK',
+        message: '生成连接多次中断，系统正在退回积分',
+        refunded: false,
+        creditsBalance: 0,
+        retryable: true,
+      },
+    };
+  };
+
+  try {
+    for (let cycle = 1; cycle <= PPT_FULL_MAX_CYCLES; cycle += 1) {
+      for (let part = 1; part <= PPT_RESUME_PARTS; part += 1) {
+        const outcome = await callWithRetry({
+          ...req,
+          category: 'doc',
+          docType: 'ppt',
+          docTypes: ['ppt'],
+          pptResumable: true,
+          pptPart: part,
+          pptFinalize: false,
+          pptAbort: false,
+        });
+        if (outcome.done) return;
+        if (!outcome.checkpoint || outcome.error) {
+          await abortRemotePpt(sb, req.idempotencyKey);
+          emitError(handlers, {
+            code: outcome.error?.code ?? 'NETWORK',
+            message: 'PPT 分段多次未完成，已自动停止并退还积分，请重新生成',
+            refunded: true,
+            creditsBalance: outcome.error?.creditsBalance ?? 0,
+            retryable: true,
+          });
+          return;
+        }
+      }
+
+      handlers.onEvent({
+        type: 'stage',
+        data: { stage: 'verify', label: '合并并检查整份课件', status: 'running' },
+      });
+      const finalOutcome = await callWithRetry(
+        {
+          ...req,
+          category: 'doc',
+          docType: 'ppt',
+          docTypes: ['ppt'],
+          pptResumable: true,
+          pptFinalize: true,
+          pptAbort: false,
+        },
+        false,
+      );
+      if (finalOutcome.done) return;
+
+      lastError = finalOutcome.error;
+      if (cycle < PPT_FULL_MAX_CYCLES) {
+        handlers.onEvent({
+          type: 'stage',
+          data: { stage: 'code', label: '质量自检未通过，自动重新生成分段', status: 'running' },
+        });
+        await waitForRetry(controller.signal, 1_500);
+        continue;
+      }
+      break;
+    }
+
+    await abortRemotePpt(sb, req.idempotencyKey);
+    emitError(handlers, {
+      code: lastError?.code ?? 'VALIDATE_FAILED',
+      message: lastError?.message ?? 'PPT 多次生成仍未通过质量检查，已退还积分',
+      refunded: true,
+      creditsBalance: lastError?.creditsBalance ?? 0,
+      retryable: true,
+    });
+  } catch (err) {
+    if (!(err instanceof DOMException && err.name === 'AbortError')) throw err;
+    await abortRemotePpt(sb, req.idempotencyKey);
+  }
+}
+
+async function abortRemotePpt(sb: SupabaseClient, idempotencyKey: string): Promise<void> {
+  try {
+    await sb.functions.invoke('generate', {
+      body: {
+        prompt: 'abort',
+        appType: 'ppt',
+        category: 'doc',
+        docType: 'ppt',
+        idempotencyKey,
+        pptResumable: true,
+        pptAbort: true,
+      } satisfies GenerateRequest,
+    });
+  } catch {
+    /* 最差情况由下次生成时自动回收 stale running 任务 */
+  }
+}
+
+function waitForRetry(signal: AbortSignal, milliseconds: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Generation cancelled', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new DOMException('Generation cancelled', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /** 发出一个 error 事件。 */
@@ -338,10 +610,22 @@ export function parseFrame(frame: string): GenEvent | null {
 /** 安全读取错误响应体并尝试 JSON 解析。 */
 async function safeJson(
   res: Response,
-): Promise<{ code?: string; message?: string; refunded?: boolean; creditsBalance?: number } | null> {
+): Promise<{
+  code?: string;
+  message?: string;
+  refunded?: boolean;
+  creditsBalance?: number;
+  retryable?: boolean;
+} | null> {
   try {
     const text = await res.text();
-    return JSON.parse(text) as { code?: string; message?: string; refunded?: boolean; creditsBalance?: number };
+    return JSON.parse(text) as {
+      code?: string;
+      message?: string;
+      refunded?: boolean;
+      creditsBalance?: number;
+      retryable?: boolean;
+    };
   } catch {
     return null;
   }

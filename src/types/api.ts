@@ -50,6 +50,14 @@ export interface GenerateRequest {
   modelKey?: string;
   /** 幂等键（前端生成的 UUID），防重复提交重复扣积分。 */
   idempotencyKey: string;
+  /** PPT 可续跑协议：把 18 页拆成多个独立 Edge 请求。 */
+  pptResumable?: boolean;
+  /** 当前生成的分段序号（1..4）。 */
+  pptPart?: number;
+  /** 全部段落完成后合并、校验、保存并结算。 */
+  pptFinalize?: boolean;
+  /** 多次续跑失败后取消整项并退款。 */
+  pptAbort?: boolean;
 }
 
 /** SSE `stage` 事件载荷。 */
@@ -70,6 +78,17 @@ export interface DeltaEvent {
 /** SSE `heartbeat` 事件载荷（每 10s，防代理断连）。 */
 export interface HeartbeatEvent {
   at: number;
+}
+
+/** SSE `checkpoint` 事件载荷（PPT 分段完成检查点）。 */
+export interface CheckpointEvent {
+  jobId: string;
+  part: number;
+  totalParts: number;
+  /** 本段命中了服务端已有检查点，无需重新调用模型。 */
+  resumed?: boolean;
+  /** 整份文档已完成合并与保存。 */
+  final?: boolean;
 }
 
 /** SSE `done` 事件载荷。 */
@@ -137,6 +156,7 @@ export type GenEvent =
   | { type: 'stage'; data: StageEvent }
   | { type: 'delta'; data: DeltaEvent }
   | { type: 'heartbeat'; data: HeartbeatEvent }
+  | { type: 'checkpoint'; data: CheckpointEvent }
   | { type: 'done'; data: DoneEvent }
   | { type: 'error'; data: ErrorEvent };
 

@@ -74,6 +74,44 @@ export function extractDocJson(raw: string): string {
  * @param maxBytes 体积上限。
  */
 export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocValidationResult {
+  return validateDocInternal(raw, maxBytes, { fullPptQuality: true });
+}
+
+/**
+ * 校验一页数受限的 PPT 分段。
+ *
+ * 可续跑生成会把 18 页拆成 4 个独立请求。单段不能套用整份 14 页下限，
+ * 但仍需守住每段 4~5 页、正文、备注和至少一个真实图示的底线。
+ */
+export function validatePptPart(
+  raw: string,
+  part: number,
+  maxBytes: number = MAX_DOC_BYTES,
+): DocValidationResult {
+  return validateDocInternal(raw, maxBytes, {
+    fullPptQuality: false,
+    minSlides: 4,
+    maxSlides: 5,
+    minVisuals: 1,
+    minCharts: 1,
+    skipFirstSlideQuality: part === 1,
+  });
+}
+
+interface DocValidationOptions {
+  fullPptQuality: boolean;
+  minSlides?: number;
+  maxSlides?: number;
+  minVisuals?: number;
+  minCharts?: number;
+  skipFirstSlideQuality?: boolean;
+}
+
+function validateDocInternal(
+  raw: string,
+  maxBytes: number,
+  options: DocValidationOptions,
+): DocValidationResult {
   const errors: string[] = [];
   const json = extractDocJson(raw);
 
@@ -89,7 +127,7 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
     return { ok: false, errors: [`JSON 解析失败：${msg}，请输出合法 JSON`], model: null };
   }
 
-  const model = normalizeDocModel(parsed);
+  const model = normalizeDocModel(parsed, options.fullPptQuality);
   if (typeof model !== 'object' || model === null) {
     return { ok: false, errors: ['DocModel 必须是 JSON 对象'], model: null };
   }
@@ -158,7 +196,7 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
   }
 
   if (model.kind === 'ppt' && Array.isArray(model.slides)) {
-    validatePptQuality(model as DocModel, errors);
+    validatePptQuality(model as DocModel, errors, options);
   }
 
   return { ok: errors.length === 0, errors, model: errors.length === 0 ? (model as DocModel) : null };
@@ -170,7 +208,7 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
  * 模型偶尔会输出 `headers` / `columns` 代替 `header`，或漏写幻灯片 index。
  * 这些不是内容质量问题，如果因此触发整份重写，既慢又容易把本来可用的课件拖到超时。
  */
-function normalizeDocModel(parsed: unknown): Partial<DocModel> {
+function normalizeDocModel(parsed: unknown, ensureFullPptVisuals: boolean): Partial<DocModel> {
   const model = parsed as Partial<DocModel> & {
     blocks?: DocBlock[];
     slides?: Slide[];
@@ -199,7 +237,7 @@ function normalizeDocModel(parsed: unknown): Partial<DocModel> {
             : 'content',
       };
     });
-    ensurePptVisualCoverage(model);
+    if (ensureFullPptVisuals) ensurePptVisualCoverage(model);
   }
 
   return model;
@@ -347,13 +385,21 @@ function normalizeBlock(block: DocBlock, fallbackIndex: number): DocBlock {
  * 这些规则与 `doc_type:ppt` 提示词的硬下限保持一致，失败会进入一次模型自修复，
  * 仍不达标则退款，避免把“能解析的文字大纲”当成合格课件交付给教师。
  */
-function validatePptQuality(model: DocModel, errors: string[]): void {
+function validatePptQuality(
+  model: DocModel,
+  errors: string[],
+  options: DocValidationOptions,
+): void {
   const slides = model.slides ?? [];
-  if (slides.length < PPT_MIN_SLIDES) {
-    errors.push(`PPT 页数不足：当前 ${slides.length} 页，至少需要 ${PPT_MIN_SLIDES} 页`);
+  const minSlides = options.minSlides ?? PPT_MIN_SLIDES;
+  const maxSlides = options.maxSlides ?? PPT_MAX_SLIDES;
+  const minVisuals = options.minVisuals ?? PPT_MIN_VISUALS;
+  const minCharts = options.minCharts ?? 0;
+  if (slides.length < minSlides) {
+    errors.push(`PPT 页数不足：当前 ${slides.length} 页，至少需要 ${minSlides} 页`);
   }
-  if (slides.length > PPT_MAX_SLIDES) {
-    errors.push(`PPT 页数过多：当前 ${slides.length} 页，不应超过 ${PPT_MAX_SLIDES} 页`);
+  if (slides.length > maxSlides) {
+    errors.push(`PPT 页数过多：当前 ${slides.length} 页，不应超过 ${maxSlides} 页`);
   }
 
   let visuals = 0;
@@ -388,13 +434,14 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
       .join(' ')
       .trim().length;
 
-    if (index > 0 && body.length < 2) {
+    const skipContentChecks = options.skipFirstSlideQuality === true && index === 0;
+    if (!skipContentChecks && body.length < 2) {
       errors.push(`第 ${index + 1} 页正文块不足：至少需要 2 个结构化内容块`);
     }
-    if (index > 0 && bodyChars < PPT_MIN_BODY_CHARS) {
+    if (!skipContentChecks && bodyChars < PPT_MIN_BODY_CHARS) {
       errors.push(`第 ${index + 1} 页内容过薄：正文少于 ${PPT_MIN_BODY_CHARS} 字`);
     }
-    if (index > 0 && notesChars < PPT_MIN_NOTES_CHARS) {
+    if (!skipContentChecks && notesChars < PPT_MIN_NOTES_CHARS) {
       errors.push(`第 ${index + 1} 页演讲者备注过短：至少需要 ${PPT_MIN_NOTES_CHARS} 字`);
     }
     if (!slide.title || slide.title.trim().length === 0) {
@@ -403,10 +450,13 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
   });
 
   // 所有学科都要有真实教学图示；仅靠表格和列表会把课件重新压回提纲。
-  if (visuals < PPT_MIN_VISUALS) {
-    errors.push(`教学图示不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张 chart 或内联 SVG image`);
+  if (visuals < minVisuals) {
+    errors.push(`教学图示不足：当前 ${visuals} 张，至少需要 ${minVisuals} 张 chart 或内联 SVG image`);
   }
-  if (dataLikeSubject && charts < 3) {
+  if (minCharts > 0 && charts < minCharts) {
+    errors.push(`本段教学图表不足：当前 ${charts} 个 chart，至少需要 ${minCharts} 个真实图表`);
+  }
+  if (minCharts === 0 && dataLikeSubject && charts < 3) {
     errors.push(`数据型课题图表不足：当前 ${charts} 个 chart，至少需要 3 个真实图表`);
   }
   if (placeholderCount > 0) {
