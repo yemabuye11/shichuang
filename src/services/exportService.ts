@@ -13,6 +13,12 @@
  */
 
 import type { ChartSpec, DocBlock, DocModel, Slide } from '@/types/doc';
+import {
+  friendlyChartLabels,
+  friendlyVisualKind,
+  isEarlyChildhoodPpt,
+  type FriendlyVisualKind,
+} from '@/utils/pptAudience';
 
 // ---------------------------------------------------------------------------
 // 导出选项
@@ -232,6 +238,18 @@ const PPT = {
   soft: 'F7F9FC',
 } as const;
 
+const FRIENDLY_PPT_THEME = {
+  cover: 'FFF9ED',
+  section: 'EEFBF4',
+  content: 'FFFEFB',
+  ink: '274060',
+  sub: '66788D',
+  sky: '7DD3FC',
+  pink: 'F472B6',
+  gold: 'F6B94A',
+  green: '86EFAC',
+} as const;
+
 const PPTX_SVG_MAX_WIDTH = 1600;
 const PPTX_SVG_MAX_HEIGHT = 1200;
 
@@ -404,6 +422,128 @@ function addChartToSlide(slide: any, block: DocBlock, x: number, y: number, w: n
   return true;
 }
 
+const FRIENDLY_PPT_STYLE: Readonly<Record<FriendlyVisualKind, { icon: string; color: string; fill: string }>> = {
+  water: { icon: '💧', color: '1687D9', fill: 'E8F6FF' },
+  cloud: { icon: '☁️', color: '5B7CBA', fill: 'EEF4FF' },
+  snow: { icon: '❄️', color: '4C8FC7', fill: 'EDFAFF' },
+  sun: { icon: '☀️', color: 'E89B18', fill: 'FFF6D8' },
+  book: { icon: '📖', color: 'B85C57', fill: 'FFF0EC' },
+  plant: { icon: '🌱', color: '3E9566', fill: 'EAF9EF' },
+  animal: { icon: '🐾', color: 'A65A8A', fill: 'FCEFF8' },
+  star: { icon: '⭐', color: 'D28A12', fill: 'FFF7DE' },
+};
+
+/**
+ * 低龄课件把 chart 映射成童趣图标卡，而不是 PowerPoint 柱形图/折线图。
+ * 仍保留结构化标签，教师下载后可以直接替换文字或图标。
+ */
+function addFriendlyChartToSlide(
+  slide: any,
+  block: DocBlock,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  const spec = block.chart;
+  if (!spec) return false;
+  const labels = friendlyChartLabels(spec).slice(0, 4);
+  if (labels.length === 0) return false;
+
+  slide.addShape('roundRect', {
+    x,
+    y,
+    w,
+    h,
+    rectRadius: 0.12,
+    fill: { color: 'FFF9ED' },
+    line: { color: 'F6D99B', pt: 1.4 },
+  });
+  slide.addText(spec.title ?? spec.expression ?? '看图想一想', {
+    x: x + 0.25,
+    y: y + 0.18,
+    w: w - 0.5,
+    h: 0.42,
+    fontFace: 'Microsoft YaHei',
+    fontSize: 18,
+    bold: true,
+    color: '24405F',
+    align: 'center',
+    valign: 'mid',
+    margin: 0,
+    fit: 'shrink',
+  });
+
+  const columns = labels.length === 1 ? 1 : 2;
+  const rows = Math.ceil(labels.length / columns);
+  const gap = 0.16;
+  const areaX = x + 0.24;
+  const areaY = y + 0.72;
+  const areaW = w - 0.48;
+  const areaH = h - (block.caption ? 1.05 : 0.92);
+  const cardW = (areaW - gap * (columns - 1)) / columns;
+  const cardH = (areaH - gap * (rows - 1)) / Math.max(rows, 1);
+
+  labels.forEach((label, index) => {
+    const kind = friendlyVisualKind(label);
+    const style = FRIENDLY_PPT_STYLE[kind];
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const cardX = areaX + col * (cardW + gap);
+    const cardY = areaY + row * (cardH + gap);
+    slide.addShape('roundRect', {
+      x: cardX,
+      y: cardY,
+      w: cardW,
+      h: cardH,
+      rectRadius: 0.08,
+      fill: { color: style.fill },
+      line: { color: 'FFFFFF', pt: 1.2 },
+    });
+    slide.addText(style.icon, {
+      x: cardX + 0.08,
+      y: cardY + 0.05,
+      w: cardW - 0.16,
+      h: Math.min(0.5, cardH * 0.46),
+      fontFace: 'Segoe UI Emoji',
+      fontSize: cardH < 0.95 ? 18 : 25,
+      align: 'center',
+      valign: 'mid',
+      margin: 0,
+    });
+    slide.addText(label, {
+      x: cardX + 0.08,
+      y: cardY + Math.min(0.55, cardH * 0.48),
+      w: cardW - 0.16,
+      h: Math.max(0.28, cardH * 0.42),
+      fontFace: 'Microsoft YaHei',
+      fontSize: cardH < 0.95 ? 12 : 15,
+      bold: true,
+      color: '29435F',
+      align: 'center',
+      valign: 'mid',
+      margin: 0,
+      fit: 'shrink',
+    });
+  });
+
+  if (block.caption) {
+    slide.addText(block.caption, {
+      x: x + 0.28,
+      y: y + h - 0.32,
+      w: w - 0.56,
+      h: 0.24,
+      fontFace: 'Microsoft YaHei',
+      fontSize: 10,
+      color: PPT.sub,
+      align: 'center',
+      margin: 0,
+      fit: 'shrink',
+    });
+  }
+  return true;
+}
+
 /** 把内联 SVG / 图片块嵌入 PPTX；外链图片不写入文件，避免离线失效。 */
 function addImageToSlide(slide: any, block: DocBlock, x: number, y: number, w: number, h: number): boolean {
   const data = block.src ? toPptxDataUri(block.src) : null;
@@ -532,7 +672,12 @@ function addBlocksToRect(
  * 目标不是把内容“塞进 PPT”，而是让导出的每一页仍然像课堂投屏：
  * 图文页左文右图，双栏页保留对照关系，表格页使用原生表格，活动与练习页保持大字号。
  */
-function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layout']): void {
+function addSlideBody(
+  slide: any,
+  body: readonly DocBlock[],
+  layout: Slide['layout'],
+  friendlyCharts: boolean,
+): void {
   const visuals = body.filter((b) => b.type === 'chart' || (b.type === 'image' && Boolean(b.src)));
   const text = body.filter((b) => b.type !== 'chart' && b.type !== 'image');
   const hasTable = text.some((block) => block.type === 'table');
@@ -564,7 +709,9 @@ function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layo
     const visualW = textValue ? 6.35 : 10.9;
     const ok =
       visual.type === 'chart'
-        ? addChartToSlide(slide, visual, visualX, 1.45, visualW, 4.95)
+        ? friendlyCharts
+          ? addFriendlyChartToSlide(slide, visual, visualX, 1.45, visualW, 4.95)
+          : addChartToSlide(slide, visual, visualX, 1.45, visualW, 4.95)
         : addImageToSlide(slide, visual, visualX, 1.42, visualW, 5.0);
     if (!ok && !textValue) {
       slide.addText(blockToSlideText(visual), {
@@ -610,6 +757,56 @@ function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layo
   });
 }
 
+/** 低龄 PPTX 封面增加“看一看 / 说一说 / 读一读”课堂步骤卡。 */
+function addFriendlyCoverMotif(slide: any): void {
+  const items = [
+    { icon: '🔎', label: '看一看', fill: 'E8F6FF' },
+    { icon: '💬', label: '说一说', fill: 'FFF0F6' },
+    { icon: '📖', label: '读一读', fill: 'FFF7DE' },
+  ];
+  const startX = 0.95;
+  const y = 4.42;
+  const cardW = 1.72;
+  const gap = 0.2;
+  items.forEach((item, index) => {
+    const x = startX + index * (cardW + gap);
+    slide.addShape('roundRect', {
+      x,
+      y,
+      w: cardW,
+      h: 0.72,
+      rectRadius: 0.1,
+      fill: { color: item.fill },
+      line: { color: 'FFFFFF', pt: 1.2 },
+    });
+    slide.addText(item.icon, {
+      x: x + 0.12,
+      y: y + 0.08,
+      w: 0.5,
+      h: 0.56,
+      fontFace: 'Segoe UI Emoji',
+      fontSize: 22,
+      align: 'center',
+      valign: 'mid',
+      margin: 0,
+    });
+    slide.addText(item.label, {
+      x: x + 0.58,
+      y: y + 0.08,
+      w: cardW - 0.68,
+      h: 0.56,
+      fontFace: 'Microsoft YaHei',
+      fontSize: 15,
+      bold: true,
+      color: FRIENDLY_PPT_THEME.ink,
+      align: 'center',
+      valign: 'mid',
+      margin: 0,
+      fit: 'shrink',
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 导出实现
 // ---------------------------------------------------------------------------
@@ -626,6 +823,7 @@ function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layo
  */
 export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Promise<PptxExportResult> {
   model = await preparePptxImages(model);
+  const friendlyCharts = isEarlyChildhoodPpt(model.meta?.grade);
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
@@ -663,11 +861,18 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
     const slide = pptx.addSlide();
     const isCover = s.layout === 'title' || s.index === 0;
     const isSection = s.layout === 'section';
-    slide.background = { color: isCover ? PPT.accent : isSection ? 'EDF3FF' : PPT.soft };
+    const coverBg = friendlyCharts ? FRIENDLY_PPT_THEME.cover : PPT.accent;
+    const sectionBg = friendlyCharts ? FRIENDLY_PPT_THEME.section : 'EDF3FF';
+    const contentBg = friendlyCharts ? FRIENDLY_PPT_THEME.content : PPT.soft;
+    const accentColor = friendlyCharts ? FRIENDLY_PPT_THEME.sky : PPT.brand;
+    const warmAccent = friendlyCharts ? FRIENDLY_PPT_THEME.gold : PPT.gold;
+    const titleColor = friendlyCharts ? FRIENDLY_PPT_THEME.ink : PPT.ink;
+    const subtitleColor = friendlyCharts ? FRIENDLY_PPT_THEME.sub : 'DCE7FF';
+    slide.background = { color: isCover ? coverBg : isSection ? sectionBg : contentBg };
 
     if (!isCover) {
-      slide.addShape('rect', { x: 0, y: 0, w: PPT.width, h: 0.12, fill: { color: PPT.brand }, line: { color: PPT.brand } });
-      slide.addShape('rect', { x: 0.72, y: 0.12, w: 0.8, h: 0.055, fill: { color: PPT.gold }, line: { color: PPT.gold } });
+      slide.addShape('rect', { x: 0, y: 0, w: PPT.width, h: 0.12, fill: { color: accentColor }, line: { color: accentColor } });
+      slide.addShape('rect', { x: 0.72, y: 0.12, w: 0.8, h: 0.055, fill: { color: warmAccent }, line: { color: warmAccent } });
     }
 
     slide.addText(s.title || '（无标题）', {
@@ -678,7 +883,7 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
       fontFace: 'Microsoft YaHei',
       fontSize: isCover ? 36 : isSection ? 34 : 28,
       bold: true,
-      color: isCover ? 'FFFFFF' : PPT.ink,
+      color: isCover ? (friendlyCharts ? FRIENDLY_PPT_THEME.ink : 'FFFFFF') : titleColor,
       align: 'left',
       valign: 'middle',
       fit: 'shrink',
@@ -691,8 +896,8 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
         y: 1.78,
         w: 0.85,
         h: 0.08,
-        fill: { color: PPT.gold },
-        line: { color: PPT.gold },
+        fill: { color: warmAccent },
+        line: { color: warmAccent },
       });
       const subtitle = [model.meta?.subject, model.meta?.grade, model.meta?.textbook, model.meta?.duration]
         .filter(Boolean)
@@ -705,11 +910,12 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
           h: 0.4,
           fontFace: 'Microsoft YaHei',
           fontSize: 16,
-          color: 'DCE7FF',
+          color: subtitleColor,
           align: 'left',
           margin: 0,
         });
       }
+      if (friendlyCharts) addFriendlyCoverMotif(slide);
       slide.addText('师创 · 请教师核对后使用', {
         x: 0.95,
         y: 6.55,
@@ -717,14 +923,14 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
         h: 0.3,
         fontFace: 'Microsoft YaHei',
         fontSize: 11,
-        color: 'BFCEE5',
+        color: friendlyCharts ? '7B8A9D' : 'BFCEE5',
         align: 'left',
         margin: 0,
       });
     } else if (isSection) {
-      addSlideBody(slide, s.body, 'two_col');
+      addSlideBody(slide, s.body, 'two_col', friendlyCharts);
     } else {
-      addSlideBody(slide, s.body, s.layout ?? 'content');
+      addSlideBody(slide, s.body, s.layout ?? 'content', friendlyCharts);
       slide.addText(`${s.index + 1} / ${baseSlides.length}`, {
         x: 11.55,
         y: 7.05,
@@ -732,7 +938,7 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
         h: 0.22,
         fontFace: 'Microsoft YaHei',
         fontSize: 9,
-        color: PPT.sub,
+        color: friendlyCharts ? FRIENDLY_PPT_THEME.sub : PPT.sub,
         align: 'right',
         margin: 0,
       });
@@ -743,7 +949,7 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
         h: 0.22,
         fontFace: 'Microsoft YaHei',
         fontSize: 9,
-        color: PPT.sub,
+        color: friendlyCharts ? FRIENDLY_PPT_THEME.sub : PPT.sub,
         margin: 0,
       });
     }

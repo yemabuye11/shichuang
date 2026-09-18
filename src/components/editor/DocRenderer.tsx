@@ -3,11 +3,15 @@ import { Box, Button, IconButton, Stack, Table, TableBody, TableCell, TableHead,
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LightbulbIcon from '@mui/icons-material/Lightbulb';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import type { DocBlock, DocModel, Slide } from '@/types/doc';
 import { ThreeViewer } from '@/components/editor/ThreeViewer';
 import { ChartBlockView } from '@/components/editor/ChartBlockView';
 import { BloomChip, PedagogySummary } from '@/components/editor/BloomChip';
 import { blocksToText } from '@/utils/geometryKernel';
+import { isEarlyChildhoodPpt } from '@/utils/pptAudience';
 
 /**
  * 文档模型渲染器（一份 DocModel → 网页呈现）。
@@ -23,6 +27,7 @@ export interface DocRendererProps {
 }
 
 export function DocRenderer({ model }: DocRendererProps): JSX.Element {
+  const friendlyCharts = isEarlyChildhoodPpt(model.meta.grade);
   return (
     <Box>
       {model.scene ? (
@@ -36,7 +41,7 @@ export function DocRenderer({ model }: DocRendererProps): JSX.Element {
       ) : null}
 
       {model.slides && model.slides.length > 0 ? (
-        <SlidesView slides={model.slides} meta={model.meta} />
+        <SlidesView slides={model.slides} meta={model.meta} friendlyCharts={friendlyCharts} />
       ) : null}
 
       {/* 认知层级汇总（教案顶部；无数据时不渲染） */}
@@ -45,7 +50,7 @@ export function DocRenderer({ model }: DocRendererProps): JSX.Element {
       {model.blocks && model.blocks.length > 0 ? (
         <Stack spacing={1.5} sx={{ mt: model.slides ? 3 : 0 }}>
           {model.blocks.map((b) => (
-            <BlockView key={b.id} block={b} />
+            <BlockView key={b.id} block={b} friendlyCharts={friendlyCharts} />
           ))}
         </Stack>
       ) : null}
@@ -54,9 +59,9 @@ export function DocRenderer({ model }: DocRendererProps): JSX.Element {
 }
 
 /** 单块渲染（外层负责认知层级 chip / 互动设计的附加展示）。 */
-function BlockView({ block }: { block: DocBlock }): JSX.Element {
+function BlockView({ block, friendlyCharts }: { block: DocBlock; friendlyCharts: boolean }): JSX.Element {
   const isHeading = block.type === 'heading';
-  const inner = renderBlockInner(block);
+  const inner = renderBlockInner(block, friendlyCharts);
   // 标题块已在标题行内渲染 chip；非标题块在块上方补一枚
   const chip = block.bloom && !isHeading ? <BloomChip level={block.bloom} compact /> : null;
   const interaction =
@@ -77,7 +82,7 @@ function BlockView({ block }: { block: DocBlock }): JSX.Element {
 }
 
 /** 单块内容渲染。 */
-function renderBlockInner(block: DocBlock): JSX.Element {
+function renderBlockInner(block: DocBlock, friendlyCharts: boolean): JSX.Element {
   switch (block.type) {
     case 'heading': {
       const level = block.level ?? 2;
@@ -170,7 +175,7 @@ function renderBlockInner(block: DocBlock): JSX.Element {
           </Typography>
         );
       }
-      return <ChartBlockView spec={block.chart} caption={block.caption} />;
+      return <ChartBlockView spec={block.chart} caption={block.caption} friendly={friendlyCharts} />;
     }
     case 'callout':
       return (
@@ -227,11 +232,18 @@ function slideBlockText(block: DocBlock): string {
 }
 
 /** 课堂画布中的单块内容。 */
-function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
+function SlideBlockContent({ block, friendlyCharts }: { block: DocBlock; friendlyCharts: boolean }): JSX.Element {
   switch (block.type) {
     case 'heading':
       return (
-        <Typography sx={{ fontSize: { xs: 18, md: 22 }, fontWeight: 800, lineHeight: 1.35 }}>
+        <Typography
+          sx={{
+            fontSize: { xs: 18, md: friendlyCharts ? 21 : 22 },
+            fontWeight: 800,
+            lineHeight: 1.35,
+            color: friendlyCharts ? '#29435F' : 'inherit',
+          }}
+        >
           {block.text}
         </Typography>
       );
@@ -242,7 +254,7 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
           sx={{
             fontSize: text.length > 130 ? { xs: 14, md: 16 } : { xs: 15, md: 18 },
             lineHeight: 1.65,
-            color: '#263247',
+            color: friendlyCharts ? '#344B66' : '#263247',
             whiteSpace: 'pre-wrap',
           }}
         >
@@ -262,8 +274,12 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
                   flex: '0 0 22px',
                   mt: 0.15,
                   borderRadius: '50%',
-                  bgcolor: block.ordered ? '#2F6BFF' : '#E9EFFA',
-                  color: block.ordered ? '#fff' : '#2F6BFF',
+                  bgcolor: friendlyCharts
+                    ? (block.ordered ? '#F472B6' : '#DDF8E8')
+                    : (block.ordered ? '#2F6BFF' : '#E9EFFA'),
+                  color: friendlyCharts
+                    ? (block.ordered ? '#fff' : '#2F8A58')
+                    : (block.ordered ? '#fff' : '#2F6BFF'),
                   display: 'grid',
                   placeItems: 'center',
                   fontSize: 11.5,
@@ -272,7 +288,9 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
               >
                 {block.ordered ? i + 1 : '•'}
               </Box>
-              <Typography sx={{ fontSize: { xs: 14, md: 17 }, lineHeight: 1.55 }}>{item}</Typography>
+              <Typography sx={{ fontSize: { xs: 14, md: 17 }, lineHeight: 1.55, color: friendlyCharts ? '#344B66' : 'inherit' }}>
+                {item}
+              </Typography>
             </Stack>
           ))}
         </Stack>
@@ -290,11 +308,11 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
             borderRadius: 1.5,
             overflow: 'hidden',
             '& th': {
-              bgcolor: '#E9F0FF',
-              color: '#1D3765',
+              bgcolor: friendlyCharts ? '#E8F8EF' : '#E9F0FF',
+              color: friendlyCharts ? '#276C4A' : '#1D3765',
               fontWeight: 800,
               fontSize: { xs: 12, md: 13.5 },
-              borderBottom: '1px solid #C9D7EE',
+              borderBottom: friendlyCharts ? '1px solid #C7E8D4' : '1px solid #C9D7EE',
               py: 0.8,
             },
             '& td': {
@@ -347,7 +365,7 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
       );
     case 'chart':
       return block.chart ? (
-        <ChartBlockView spec={block.chart} caption={block.caption} />
+        <ChartBlockView spec={block.chart} caption={block.caption} friendly={friendlyCharts} />
       ) : (
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
           {block.caption ?? '（图表数据缺失）'}
@@ -361,8 +379,8 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
             gap: 1.1,
             px: 1.5,
             py: 1.2,
-            borderLeft: '5px solid #F3B23C',
-            bgcolor: '#FFF8E7',
+            borderLeft: `5px solid ${friendlyCharts ? '#F6B94A' : '#F3B23C'}`,
+            bgcolor: friendlyCharts ? '#FFF9E9' : '#FFF8E7',
           }}
         >
           <LightbulbIcon sx={{ fontSize: 19, color: '#C78300', mt: 0.2 }} />
@@ -383,13 +401,51 @@ function SlideBlockContent({ block }: { block: DocBlock }): JSX.Element {
   }
 }
 
+/** 低龄课件封面上的课堂步骤，给教师一眼看出这节课会怎样展开。 */
+function FriendlyCoverMotif(): JSX.Element {
+  const steps = [
+    { icon: VisibilityIcon, label: '看一看', bg: '#E8F6FF', color: '#1687D9' },
+    { icon: RecordVoiceOverIcon, label: '说一说', bg: '#FFF0F6', color: '#C84F86' },
+    { icon: MenuBookIcon, label: '读一读', bg: '#FFF7DE', color: '#B77A06' },
+  ];
+  return (
+    <Stack direction="row" spacing={{ xs: 0.8, sm: 1.2 }} sx={{ mt: 3.25, flexWrap: 'wrap', gap: 1 }}>
+      {steps.map(({ icon: Icon, label, bg, color }) => (
+        <Stack
+          key={label}
+          direction="row"
+          alignItems="center"
+          spacing={0.8}
+          sx={{
+            minWidth: { xs: 88, sm: 112 },
+            px: { xs: 1.1, sm: 1.4 },
+            py: 1,
+            borderRadius: 2.5,
+            bgcolor: bg,
+            color,
+            border: '2px solid rgba(255,255,255,0.9)',
+            boxShadow: '0 7px 16px rgba(68,86,112,0.08)',
+          }}
+        >
+          <Icon sx={{ fontSize: { xs: 22, sm: 26 } }} />
+          <Typography sx={{ fontSize: { xs: 14, sm: 16 }, fontWeight: 900, color: '#29435F' }}>
+            {label}
+          </Typography>
+        </Stack>
+      ))}
+    </Stack>
+  );
+}
+
 /** PPT 幻灯片分页查看器。 */
 function SlidesView({
   slides,
   meta,
+  friendlyCharts,
 }: {
   slides: readonly Slide[];
   meta: DocModel['meta'];
+  friendlyCharts: boolean;
 }): JSX.Element {
   const [index, setIndex] = useState(0);
   const slide = slides[index];
@@ -400,6 +456,13 @@ function SlidesView({
   const textBlocks = slide.body.filter((block) => !isSlideVisual(block));
   const twoColumn = isTwoColumnSlide(slide, textBlocks);
   const metaLine = [meta.subject, meta.grade, meta.textbook, meta.duration].filter(Boolean).join(' · ');
+  const coverBackground = friendlyCharts ? '#FFF9ED' : '#16243A';
+  const coverTitleColor = friendlyCharts ? '#24405F' : '#FFF';
+  const coverMetaColor = friendlyCharts ? '#60728A' : '#C8D5EA';
+  const sectionBackground = friendlyCharts ? '#EEFBF4' : '#EDF3FF';
+  const contentBackground = friendlyCharts ? '#FFFEFB' : '#FFFFFF';
+  const accentColor = friendlyCharts ? '#7DD3FC' : '#2F6BFF';
+  const warmAccent = friendlyCharts ? '#F6B94A' : '#F3B23C';
 
   return (
     <Box sx={{ mb: 2 }}>
@@ -412,22 +475,24 @@ function SlidesView({
           minHeight: { xs: 360, md: 610 },
           borderRadius: 2.5,
           overflow: 'hidden',
-          border: '1px solid',
-          borderColor: isCover ? '#233A5E' : 'divider',
-          bgcolor: isCover ? '#16243A' : isSection ? '#EDF3FF' : '#FFFFFF',
-          boxShadow: '0 12px 34px rgba(20,36,58,0.10)',
+          border: friendlyCharts && isCover ? '2px solid #F6D99B' : '1px solid',
+          borderColor: isCover ? (friendlyCharts ? '#F6D99B' : '#233A5E') : 'divider',
+          bgcolor: isCover ? coverBackground : isSection ? sectionBackground : contentBackground,
+          boxShadow: friendlyCharts
+            ? '0 14px 34px rgba(95,116,142,0.12)'
+            : '0 12px 34px rgba(20,36,58,0.10)',
           p: { xs: 2.25, sm: 3.25, md: 4 },
         }}
       >
         {!isCover ? (
           <>
-            <Box sx={{ position: 'absolute', left: 0, top: 0, width: '100%', height: 7, bgcolor: '#2F6BFF' }} />
+            <Box sx={{ position: 'absolute', left: 0, top: 0, width: '100%', height: 7, bgcolor: accentColor }} />
             <Typography
               sx={{
                 position: 'absolute',
                 right: { xs: 18, sm: 28 },
                 top: { xs: 18, sm: 24 },
-                color: '#8290A5',
+                color: friendlyCharts ? '#72829A' : '#8290A5',
                 fontSize: 12,
                 fontWeight: 700,
                 letterSpacing: 0.4,
@@ -440,11 +505,11 @@ function SlidesView({
 
         {isCover ? (
           <Box sx={{ minHeight: { xs: 300, md: 540 }, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-            <Box sx={{ width: 72, height: 7, bgcolor: '#F3B23C', mb: 3 }} />
+            <Box sx={{ width: 72, height: 7, bgcolor: warmAccent, mb: 3 }} />
             <Typography
               sx={{
                 maxWidth: 850,
-                color: '#FFF',
+                color: coverTitleColor,
                 fontSize: { xs: 28, sm: 38, md: 48 },
                 fontWeight: 900,
                 lineHeight: 1.25,
@@ -453,21 +518,22 @@ function SlidesView({
               {slide.title}
             </Typography>
             {metaLine ? (
-              <Typography sx={{ mt: 2.5, color: '#C8D5EA', fontSize: { xs: 13, md: 16 }, fontWeight: 600 }}>
+              <Typography sx={{ mt: 2.5, color: coverMetaColor, fontSize: { xs: 13, md: 16 }, fontWeight: 600 }}>
                 {metaLine}
               </Typography>
             ) : null}
-            <Stack spacing={1.25} sx={{ mt: 3.25, maxWidth: 860 }}>
+            {friendlyCharts ? <FriendlyCoverMotif /> : null}
+            <Stack spacing={1.25} sx={{ mt: friendlyCharts ? 2.5 : 3.25, maxWidth: 860 }}>
               {slide.body.map((block) => (
                 <Box
                   key={block.id}
                   sx={{
-                    color: '#E9EFFA',
-                    '& .MuiTypography-root': { color: '#E9EFFA !important' },
+                    color: friendlyCharts ? '#344B66' : '#E9EFFA',
+                    '& .MuiTypography-root': { color: friendlyCharts ? '#344B66 !important' : '#E9EFFA !important' },
                     '& .b-callout': { bgcolor: 'transparent' },
                   }}
                 >
-                  <SlideBlockContent block={block} />
+                  <SlideBlockContent block={block} friendlyCharts={friendlyCharts} />
                 </Box>
               ))}
             </Stack>
@@ -479,7 +545,7 @@ function SlidesView({
               sx={{
                 mt: isSection ? { xs: 5, md: 8 } : 0,
                 pr: 7,
-                color: '#15243C',
+                color: friendlyCharts ? '#274060' : '#15243C',
                 fontSize: isSection
                   ? { xs: 30, sm: 38, md: 46 }
                   : { xs: 22, sm: 26, md: 31 },
@@ -490,9 +556,9 @@ function SlidesView({
               {slide.title}
             </Typography>
             {isSection ? (
-              <Box sx={{ mt: 2, width: 90, height: 6, bgcolor: '#F3B23C' }} />
+              <Box sx={{ mt: 2, width: 90, height: 6, bgcolor: warmAccent }} />
             ) : (
-              <Box sx={{ mt: 1.25, mb: 2, width: 56, height: 4, bgcolor: '#F3B23C' }} />
+              <Box sx={{ mt: 1.25, mb: 2, width: 56, height: 4, bgcolor: warmAccent }} />
             )}
 
             <Box
@@ -513,12 +579,12 @@ function SlidesView({
                 <>
                   <Stack spacing={1.4}>
                     {textBlocks.map((block) => (
-                      <SlideBlockContent key={block.id} block={block} />
+                      <SlideBlockContent key={block.id} block={block} friendlyCharts={friendlyCharts} />
                     ))}
                   </Stack>
                   <Stack spacing={1.5}>
                     {visualBlocks.map((block) => (
-                      <SlideBlockContent key={block.id} block={block} />
+                      <SlideBlockContent key={block.id} block={block} friendlyCharts={friendlyCharts} />
                     ))}
                   </Stack>
                 </>
@@ -530,10 +596,15 @@ function SlidesView({
                     <Stack
                       key={columnIndex}
                       spacing={1.4}
-                      sx={{ pl: columnIndex === 1 ? { md: 2.5 } : 0, borderLeft: columnIndex === 1 ? { md: '1px solid #E1E8F2' } : 0 }}
+                      sx={{
+                        pl: columnIndex === 1 ? { md: 2.5 } : 0,
+                        borderLeft: columnIndex === 1
+                          ? { md: `1px solid ${friendlyCharts ? '#DDEBE4' : '#E1E8F2'}` }
+                          : 0,
+                      }}
                     >
                       {column.map((block) => (
-                        <SlideBlockContent key={block.id} block={block} />
+                        <SlideBlockContent key={block.id} block={block} friendlyCharts={friendlyCharts} />
                       ))}
                     </Stack>
                   ));
@@ -541,15 +612,27 @@ function SlidesView({
               ) : (
                 <Stack spacing={1.45}>
                   {slide.body.map((block) => (
-                    <SlideBlockContent key={block.id} block={block} />
+                    <SlideBlockContent key={block.id} block={block} friendlyCharts={friendlyCharts} />
                   ))}
                 </Stack>
               )}
             </Box>
 
-            <Box sx={{ position: 'absolute', left: { xs: 18, sm: 28 }, bottom: 16, display: 'flex', alignItems: 'center', gap: 0.8 }}>
-              <Box sx={{ width: 20, height: 3, bgcolor: '#F3B23C' }} />
-              <Typography sx={{ fontSize: 10.5, color: '#8A96A8', fontWeight: 700 }}>师创课堂课件</Typography>
+            <Box
+              sx={{
+                position: friendlyCharts ? { xs: 'static', md: 'absolute' } : 'absolute',
+                left: { xs: 18, sm: 28 },
+                bottom: 16,
+                mt: friendlyCharts ? { xs: 2, md: 0 } : 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.8,
+              }}
+            >
+              <Box sx={{ width: 20, height: 3, bgcolor: warmAccent }} />
+              <Typography sx={{ fontSize: 10.5, color: friendlyCharts ? '#7B8A9D' : '#8A96A8', fontWeight: 700 }}>
+                师创课堂课件
+              </Typography>
             </Box>
           </>
         )}

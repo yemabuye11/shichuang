@@ -1,5 +1,18 @@
-import { Box, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
+import AcUnitIcon from '@mui/icons-material/AcUnit';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import CloudIcon from '@mui/icons-material/Cloud';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import ParkIcon from '@mui/icons-material/Park';
+import PetsIcon from '@mui/icons-material/Pets';
+import WaterDropIcon from '@mui/icons-material/WaterDrop';
+import WbSunnyIcon from '@mui/icons-material/WbSunny';
 import type { ChartSpec } from '@/types/doc';
+import {
+  friendlyChartLabels,
+  friendlyVisualKind,
+  type FriendlyVisualKind,
+} from '@/utils/pptAudience';
 
 /**
  * 图表块渲染器（**纯内联 SVG**，不引第三方图表库）。
@@ -45,10 +58,102 @@ export interface ChartBlockViewProps {
   spec: ChartSpec;
   /** 图注（块级 caption，优先级低于 spec.title）。 */
   caption?: string;
+  /** 低龄课件使用童趣图标卡，不显示坐标轴、柱形或折线。 */
+  friendly?: boolean;
+}
+
+const FRIENDLY_STYLES: Readonly<Record<FriendlyVisualKind, { icon: typeof WaterDropIcon; color: string; bg: string }>> = {
+  water: { icon: WaterDropIcon, color: '#1687D9', bg: '#E8F6FF' },
+  cloud: { icon: CloudIcon, color: '#5B7CBA', bg: '#EEF4FF' },
+  snow: { icon: AcUnitIcon, color: '#4C8FC7', bg: '#EDFAFF' },
+  sun: { icon: WbSunnyIcon, color: '#E89B18', bg: '#FFF6D8' },
+  book: { icon: MenuBookIcon, color: '#B85C57', bg: '#FFF0EC' },
+  plant: { icon: ParkIcon, color: '#3E9566', bg: '#EAF9EF' },
+  animal: { icon: PetsIcon, color: '#A65A8A', bg: '#FCEFF8' },
+  star: { icon: AutoAwesomeIcon, color: '#D28A12', bg: '#FFF7DE' },
+};
+
+/** 低龄图表改为童趣图标卡，保留教学顺序但不再呈现统计坐标轴。 */
+function FriendlyChartView({ spec, caption }: ChartBlockViewProps): JSX.Element {
+  const labels = friendlyChartLabels(spec);
+  const title = spec.title ?? spec.expression ?? '看图想一想';
+  return (
+    <Box
+      sx={{
+        my: 1.5,
+        p: { xs: 1.5, sm: 2.25 },
+        borderRadius: 4,
+        bgcolor: '#FFF9ED',
+        border: '2px solid #F6D99B',
+      }}
+    >
+      <Typography sx={{ fontSize: { xs: 17, sm: 20 }, fontWeight: 900, color: '#24405F', textAlign: 'center' }}>
+        {title}
+      </Typography>
+      <Box
+        sx={{
+          mt: 1.75,
+          display: 'grid',
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: labels.length > 4 ? 'repeat(3, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))' },
+          gap: { xs: 1, sm: 1.5 },
+        }}
+      >
+        {labels.map((label, index) => {
+          const kind = friendlyVisualKind(label);
+          const style = FRIENDLY_STYLES[kind];
+          const Icon = style.icon;
+          return (
+            <Stack
+              key={`${label}-${index}`}
+              alignItems="center"
+              justifyContent="center"
+              spacing={0.75}
+              sx={{
+                minHeight: { xs: 108, sm: 126 },
+                px: 1.25,
+                py: 1.25,
+                borderRadius: 3,
+                bgcolor: style.bg,
+                border: '2px solid rgba(255,255,255,0.92)',
+                boxShadow: '0 7px 16px rgba(61,82,113,0.08)',
+                animation: 'shichuang-cute-bob 3.2s ease-in-out infinite',
+                animationDelay: `${index * 0.18}s`,
+                '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+              }}
+            >
+              <Box
+                sx={{
+                  display: 'grid',
+                  placeItems: 'center',
+                  width: { xs: 46, sm: 54 },
+                  height: { xs: 46, sm: 54 },
+                  borderRadius: '50%',
+                  bgcolor: '#FFFFFF',
+                  color: style.color,
+                }}
+              >
+                <Icon sx={{ fontSize: { xs: 28, sm: 34 } }} />
+              </Box>
+              <Typography sx={{ fontSize: { xs: 15, sm: 17 }, fontWeight: 800, color: '#29435F', textAlign: 'center' }}>
+                {label}
+              </Typography>
+            </Stack>
+          );
+        })}
+      </Box>
+      {caption ? (
+        <Typography sx={{ mt: 1.35, fontSize: 13.5, color: '#60728A', textAlign: 'center', lineHeight: 1.6 }}>
+          {caption}
+        </Typography>
+      ) : null}
+    </Box>
+  );
 }
 
 /** 把 ChartSpec 渲染为内联 SVG 卡片。 */
-export function ChartBlockView({ spec, caption }: ChartBlockViewProps): JSX.Element {
+export function ChartBlockView({ spec, caption, friendly = false }: ChartBlockViewProps): JSX.Element {
+  if (friendly) return <FriendlyChartView spec={spec} caption={caption} friendly />;
+
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
 

@@ -321,6 +321,8 @@ interface PptResumeMeta {
   readonly promptVersion: string;
   readonly systemPrompt: string;
   readonly userPrompt: string;
+  readonly subject?: string;
+  readonly grade?: string;
   readonly modelKey: string;
   readonly runtimeModelId: string;
   readonly provider: string;
@@ -692,6 +694,8 @@ function createPptResumableResponse(
             jobId,
             promptVersion: composed.promptVersion,
             systemPrompt: composed.systemPrompt,
+            subject: body.subject,
+            grade: body.grade,
             // 可续跑链路把 18 页预算写入每一段自己的提示词，避免这里再重复
             // “固定输出 18 页”而让模型在单段请求里继续生成整份课件。
             userPrompt: composed.userPrompt,
@@ -938,7 +942,10 @@ function createPptResumableResponse(
           adapter,
           {
             systemPrompt: meta.systemPrompt,
-            userPrompt: withPptPartBudget(meta.userPrompt, part as PptPart),
+            userPrompt: withPptPartBudget(meta.userPrompt, part as PptPart, {
+              subject: meta.subject,
+              grade: meta.grade,
+            }),
             maxOutputTokens: meta.maxOutputTokens,
             temperature: meta.temperature,
           },
@@ -1292,7 +1299,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
               .eq('id', jobId);
 
             // ---- 5. 调模型（文档类流式收集完整 JSON）----
-            const budgetedUserPrompt = withDocOutputBudget(composed.userPrompt, f);
+            const budgetedUserPrompt = withDocOutputBudget(composed.userPrompt, f, {
+              subject: body.subject,
+              grade: body.grade,
+            });
             const docMaxOutput = f === 'ppt' ? Math.min(maxOutput, PPT_OUTPUT_TOKEN_CAP) : maxOutput;
             const docTemperature = f === 'ppt' ? 0.35 : 0.7;
             const llmReq: LlmRequest = {
@@ -1337,7 +1347,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
                     adapter,
                     {
                       systemPrompt: composed.systemPrompt,
-                      userPrompt: withPptPartBudget(budgetedUserPrompt, part),
+                      userPrompt: withPptPartBudget(budgetedUserPrompt, part, {
+                        subject: body.subject,
+                        grade: body.grade,
+                      }),
                       maxOutputTokens: partMaxOutput,
                       temperature: docTemperature,
                     },
@@ -2174,19 +2187,35 @@ function isProbablyTruncatedDoc(raw: string): boolean {
  * @param userPrompt 原始 user 消息。
  * @param docType 文档类型。
  */
-function withDocOutputBudget(userPrompt: string, docType: string): string {
+function withDocOutputBudget(
+  userPrompt: string,
+  docType: string,
+  context: { subject?: string; grade?: string } = {},
+): string {
   if (docType !== 'ppt') return userPrompt;
+  const earlyChildhood = isEarlyChildhoodGrade(context.grade);
+  const visualRule = earlyChildhood
+    ? '3. 整份至少 4 个真实教学图示；图示统一用 chart 字段承载，但它是“童趣教学画面卡”而不是统计图：kind 只写 bar，categories 只写 2~4 个中文字词、动作、角色或观察画面，values 全部写 1。禁止用柱形、折线、坐标轴、百分比或数量对比表达故事、字词、角色关系和天气变化过程；平台会自动把这些标签画成水、云、雪、太阳、书本等童趣图标卡；\n'
+    : '3. 整份至少 4 个真实教学图示；图示优先使用短数据 chart（categories / values 各不超过 5 项），禁止输出 data:image/svg+xml 内联 SVG；不足的教学结构图由平台自动补齐；\n';
+  const languageRule = earlyChildhood
+    ? `4. 面向${context.grade ?? '小学低年级'}${context.subject ? ` ${context.subject}` : ''}课堂，正文优先使用短句、动作词、观察问题和可以照做的口令；每页至少设计一个“看一看、说一说、读一读、演一演、圈一圈、画一画”活动，不能堆术语；\n`
+    : '';
+  const dataRuleIndex = earlyChildhood ? 5 : 4;
+  const chineseRuleIndex = earlyChildhood ? 6 : 5;
+  const schemaRuleIndex = earlyChildhood ? 7 : 6;
+  const jsonRuleIndex = earlyChildhood ? 8 : 7;
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 本次输出预算（最高优先级，覆盖前文的扩展性建议）\n' +
     '请在 12000 tokens 内完成完整 JSON，必须一口气闭合，不能截断：\n' +
     '1. 固定输出 18 页：封面、学习目标、情境导入、初读任务、字词理解、2 个知识讲解、例题示范、跟做活动、易错提醒、基础练习、提高练习、迁移应用、课堂讨论、方法归纳、课堂小结、分层作业，最后 1 页写教师核对与课上机动提示；\n' +
     '2. 每页保留 2~4 个正文块，每页 notes 控制在 45~100 字，写教师可直接照读的话，并包含一个追问或学生易错点；\n' +
-    '3. 整份至少 4 个真实教学图示；图示优先使用短数据 chart（categories / values 各不超过 5 项），禁止输出 data:image/svg+xml 内联 SVG；不足的教学结构图由平台自动补齐；\n' +
-    '4. 至少 1 个 table、2 个 callout；讲解页、例题页、活动页、练习页要有真实内容，不能只写标题或方法口号；\n' +
-    '5. 图示中的可见文字必须使用中文，禁止 Water Cycle、Evaporation 等英文标签；\n' +
-    '6. 表格表头字段统一写 `header`，禁止写成 `headers` 或 `columns`；callout 只用 `text`，不要自造 `title` 字段；\n' +
-    '7. 只输出一个完整 JSON 对象，不要解释过程，不要输出备选方案。'
+    visualRule +
+    languageRule +
+    `${dataRuleIndex}. 至少 1 个 table、2 个 callout；讲解页、例题页、活动页、练习页要有真实内容，不能只写标题或方法口号；\n` +
+    `${chineseRuleIndex}. 图示中的可见文字必须使用中文，禁止 Water Cycle、Evaporation 等英文标签；\n` +
+    `${schemaRuleIndex}. 表格表头字段统一写 \`header\`，禁止写成 \`headers\` 或 \`columns\`；callout 只用 \`text\`，不要自造 \`title\` 字段；\n` +
+    `${jsonRuleIndex}. 只输出一个完整 JSON 对象，不要解释过程，不要输出备选方案。`
   );
 }
 
@@ -2199,7 +2228,11 @@ function withDocOutputBudget(userPrompt: string, docType: string): string {
  */
 type PptPart = 1 | 2 | 3 | 4 | 5 | 6;
 
-function withPptPartBudget(userPrompt: string, part: PptPart): string {
+function withPptPartBudget(
+  userPrompt: string,
+  part: PptPart,
+  context: { subject?: string; grade?: string } = {},
+): string {
   const first = [
     '1. 封面',
     '2. 学习目标',
@@ -2253,6 +2286,13 @@ function withPptPartBudget(userPrompt: string, part: PptPart): string {
             ? '第 13~15 页'
             : '第 16~18 页';
   const expected = 3;
+  const earlyChildhood = isEarlyChildhoodGrade(context.grade);
+  const visualRule = earlyChildhood
+    ? '本段至少 1 个教学图示块，统一用 chart 字段承载“童趣教学画面卡”：kind 写 bar，categories 写 2~4 个中文字词、动作、角色或观察画面，values 全部写 1。禁止柱形、折线、坐标轴、百分比和数量对比；平台会改成水、云、雪、太阳、书本等可爱图标卡。\n'
+    : '本段必须至少 1 个短数据 chart，charts 的 categories / values 各不超过 5 项。\n';
+  const languageRule = earlyChildhood
+    ? `本段面向${context.grade ?? '小学低年级'}${context.subject ? ` ${context.subject}` : ''}课堂：句子短、字大、重点少；优先写学生能看见、能模仿、能开口说的内容；每页至少一个观察、朗读、表演、圈画、连线或口头表达任务。\n`
+    : '';
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
@@ -2263,11 +2303,20 @@ function withPptPartBudget(userPrompt: string, part: PptPart): string {
     '所有教学内容只能写进 slides，禁止在 blocks 中重复一遍；禁止输出 verifyHints、createdAt、school 等非必需字段。\n' +
     'meta 只保留 title、subject、grade、textbook、duration、difficulty。\n' +
     '每页保留 2~3 个正文块，notes 写 45~80 字可直接照读的话，并包含追问或学生易错点。\n' +
-    '本段必须至少 1 个短数据 chart，charts 的 categories / values 各不超过 5 项。\n' +
+    visualRule +
+    languageRule +
     '禁止输出 data:image/svg+xml、外链图片或长 SVG；图表数据保持简短。\n' +
     '禁止出现“我按某年级理解”“不对可以让老师改”“AI生成”等模型自述；最后一页写成教师可直接授课的核对清单。\n' +
     '只输出一个完整 JSON 对象，不要解释，不要输出代码块以外的文字。'
   );
+}
+
+/** 判断是否为需要童趣表达的低龄课堂（幼儿园至小学三年级）。 */
+function isEarlyChildhoodGrade(grade?: string): boolean {
+  const text = (grade ?? '').replace(/\s+/g, '');
+  if (!text) return false;
+  if (/幼儿园|学前|(?:一|二|三|[1-3])年级/.test(text)) return true;
+  return /小学/.test(text) && !/(?:四|五|六|[4-6])年级/.test(text);
 }
 
 /** 解析 PPT 分段输出，保留模型返回的 meta / blocks / version。 */

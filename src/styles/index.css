@@ -106,6 +106,16 @@ button {
 }
 
 /* 骨架屏微光动画 */
+@keyframes shichuang-cute-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [style*="shichuang-cute-bob"] {
+    animation: none !important;
+  }
+}
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
