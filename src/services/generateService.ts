@@ -241,7 +241,7 @@ async function runRemote(
   await parseSse(res.body, handlers.onEvent);
 }
 
-const PPT_RESUME_PARTS = 4;
+const PPT_RESUME_PARTS = 6;
 const PPT_PART_CLIENT_TIMEOUT_MS = 138_000;
 const PPT_PART_MAX_ATTEMPTS = 3;
 const PPT_FULL_MAX_CYCLES = 2;
@@ -267,7 +267,7 @@ interface RemoteCallOutcome {
  * PPT 跨请求续跑。
  *
  * 每个分段请求都由 Edge 平台独立计时，前一段的 JSON 已写入服务端检查点；
- * 网络被网关切断时只重试当前段，不会丢掉已经生成好的页面。四段全部完成后
+ * 网络被网关切断时只重试当前段，不会丢掉已经生成好的页面。六段全部完成后
  * 再单独发一个最终请求做合并、质量门禁、存储和结算。
  */
 async function runRemotePptResumable(
@@ -420,7 +420,7 @@ async function runRemotePptResumable(
             code: outcome.error?.code ?? 'NETWORK',
             message: outcome.error?.message
               ? `${outcome.error.message}。已自动停止并退还积分，请重试`
-              : 'PPT 分段多次未完成，已自动停止并退还积分，请重新生成',
+              : `PPT 第 ${part} 段在写入检查点前连接中断，已自动停止并退还积分，请重新生成`,
             refunded: true,
             creditsBalance: outcome.error?.creditsBalance ?? 0,
             retryable: true,

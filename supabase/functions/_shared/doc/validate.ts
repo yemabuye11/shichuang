@@ -80,8 +80,8 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
 /**
  * 校验一页数受限的 PPT 分段。
  *
- * 可续跑生成会把 18 页拆成 4 个独立请求。单段不能套用整份 14 页下限，
- * 但仍需守住每段 4~5 页、正文、备注和至少一个真实图示的底线。
+ * 可续跑生成会把 18 页拆成 6 个独立请求。单段不能套用整份 14 页下限，
+ * 但仍需守住每段 3 页、正文、备注和至少一个真实图示的底线。
  */
 export function validatePptPart(
   raw: string,
@@ -90,8 +90,8 @@ export function validatePptPart(
 ): DocValidationResult {
   return validateDocInternal(raw, maxBytes, {
     fullPptQuality: false,
-    minSlides: 4,
-    maxSlides: 5,
+    minSlides: 3,
+    maxSlides: 3,
     minVisuals: 1,
     minCharts: 1,
     skipFirstSlideQuality: part === 1,

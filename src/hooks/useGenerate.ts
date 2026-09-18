@@ -380,7 +380,7 @@ export function estimateRemainingMs(snap: GenerateSnapshot): number {
   if (snap.status === 'done') return 0;
   const target =
     snap.request?.category === 'doc' && snap.request.docType === 'ppt'
-      ? 180_000
+      ? 360_000
       : 45_000;
   const remaining = target - snap.elapsedMs;
   return remaining > 0 ? remaining : 3_000;

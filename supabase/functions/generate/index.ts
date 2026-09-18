@@ -59,9 +59,9 @@ const DOC_STREAM_MAX_TIMEOUT_MS = 180_000;
  * 紧凑修复而不是把半份 JSON 当成成功产物交付。
  */
 const PPT_OUTPUT_TOKEN_CAP = 12_000;
-/** 可续跑 PPT：4 个短请求，每个请求由平台连接独立承载。 */
-const PPT_RESUME_TOTAL_PARTS = 4;
-const PPT_RESUME_PART_MAX_OUTPUT = 3_500;
+/** 可续跑 PPT：6 个短请求，每个请求由平台连接独立承载。 */
+const PPT_RESUME_TOTAL_PARTS = 6;
+const PPT_RESUME_PART_MAX_OUTPUT = 4_500;
 const PPT_RESUME_PART_TIMEOUT_MS = 125_000;
 const PPT_CHECKPOINT_BUCKET = 'apps-html';
 const PPT_CHECKPOINT_PREFIX = 'ppt-resume';
@@ -953,9 +953,13 @@ function createPptResumableResponse(
         const partValidation = validatePptPart(partResult.content, part, MAX_DOC_BYTES);
         if (!partValidation.ok || !partValidation.model) {
           const detail = partValidation.errors.slice(0, 3).join('；');
+          const truncated = partResult.finishReason === 'length' ||
+            isProbablyTruncatedDoc(partResult.content);
           throw new AppError(
             'VALIDATE_FAILED',
-            `第 ${part} 段内容不完整，系统会自动重新生成这一段${detail ? `（${detail}）` : ''}`,
+            truncated
+              ? `第 ${part} 段达到单次输出上限，系统会自动缩短后重跑这一段${detail ? `（${detail}）` : ''}`
+              : `第 ${part} 段内容不完整，系统会自动重新生成这一段${detail ? `（${detail}）` : ''}`,
             { retryable: true, refundable: false },
           );
         }
@@ -1317,7 +1321,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
               }
               usage = normalizeUsage(null, docJson, composed.systemPrompt + composed.userPrompt);
             } else if (f === 'ppt') {
-              // 18 页拆成四个并行 JSON：每段 4~5 页，单段更短，降低任一供应商
+              // 18 页拆成六个并行 JSON：每段 3 页，单段更短，降低任一供应商
               // 在 150 秒网关窗口内被截断的概率。第一段持续给教师可见的实时进度。
               const partMaxOutput = Math.min(docMaxOutput, PPT_RESUME_PART_MAX_OUTPUT);
               const modelId = resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId);
@@ -1328,7 +1332,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 totalTimeoutMs: PPT_RESUME_PART_TIMEOUT_MS,
               };
               const parts = await Promise.all(
-                ([1, 2, 3, 4] as PptPart[]).map((part) =>
+                (Array.from({ length: PPT_RESUME_TOTAL_PARTS }, (_, index) => index + 1) as PptPart[]).map((part) =>
                   callDocStreaming(
                     adapter,
                     {
@@ -2187,50 +2191,68 @@ function withDocOutputBudget(userPrompt: string, docType: string): string {
 }
 
 /**
- * 给 18 页 PPT 的四个分段追加边界。
+ * 给 18 页 PPT 的六个分段追加边界。
  *
  * 单次生成 18 页时，上游即使能用也会在 130 秒窗口内被截断。这里把同一课时拆成
- * 四个完整 JSON，再由服务端合并后统一跑质量门禁，既保留课堂流程，也避免
+ * 六个完整 JSON，再由服务端合并后统一跑质量门禁，既保留课堂流程，也避免
  * 把超时风险转嫁给教师。
  */
-type PptPart = 1 | 2 | 3 | 4;
+type PptPart = 1 | 2 | 3 | 4 | 5 | 6;
 
 function withPptPartBudget(userPrompt: string, part: PptPart): string {
   const first = [
     '1. 封面',
     '2. 学习目标',
     '3. 情境导入',
-    '4. 初读任务',
-    '5. 字词 / 概念理解',
   ];
   const second = [
+    '4. 初读任务',
+    '5. 字词 / 概念理解',
     '6. 知识讲解 1',
+  ];
+  const third = [
     '7. 知识讲解 2',
     '8. 例题示范',
     '9. 跟着做 / 课堂活动',
-    '10. 易错提醒',
-  ];
-  const third = [
-    '11. 基础练习',
-    '12. 提高练习',
-    '13. 迁移应用',
-    '14. 课堂讨论',
   ];
   const fourth = [
+    '10. 易错提醒',
+    '11. 基础练习',
+    '12. 提高练习',
+  ];
+  const fifth = [
+    '13. 迁移应用',
+    '14. 课堂讨论',
     '15. 方法归纳',
+  ];
+  const sixth = [
     '16. 课堂小结',
     '17. 分层作业',
     '18. 教师核对与课上机动提示',
   ];
-  const pages = part === 1 ? first : part === 2 ? second : part === 3 ? third : fourth;
-  const range = part === 1
-    ? '第 1~5 页'
+  const pages = part === 1
+    ? first
     : part === 2
-      ? '第 6~10 页'
+      ? second
       : part === 3
-        ? '第 11~14 页'
-        : '第 15~18 页';
-  const expected = part === 1 || part === 2 ? 5 : 4;
+        ? third
+        : part === 4
+          ? fourth
+          : part === 5
+            ? fifth
+            : sixth;
+  const range = part === 1
+    ? '第 1~3 页'
+    : part === 2
+      ? '第 4~6 页'
+      : part === 3
+        ? '第 7~9 页'
+        : part === 4
+          ? '第 10~12 页'
+          : part === 5
+            ? '第 13~15 页'
+            : '第 16~18 页';
+  const expected = 3;
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
@@ -2267,7 +2289,7 @@ function parsePptPart(raw: string, part: PptPart): Record<string, unknown> {
   return model;
 }
 
-/** 合并三个 PPT 分段，并统一重排页码。 */
+/** 合并各 PPT 分段，并统一重排页码。 */
 function mergePptParts(rawParts: readonly string[]): string {
   const parsed = rawParts.map((raw, index) => parsePptPart(raw, (index + 1) as PptPart));
   const [first, ...rest] = parsed;
