@@ -41,7 +41,7 @@ import {
   MAX_DOC_BYTES,
 } from '../_shared/doc/validate.ts';
 import { renderDoc } from '../_shared/doc/render.ts';
-import { isDocType, type DocModel } from '../_shared/doc/types.ts';
+import { isDocType, type DocBlock, type DocModel } from '../_shared/doc/types.ts';
 import { assertUnderMonthlyCap, checkTokenLimit, costOf, currentPeriod } from '../_shared/cost.ts';
 import { getSearchAdapter } from '../_shared/search/index.ts';
 
@@ -747,7 +747,7 @@ function createPptResumableResponse(
 
           const generatedAt = new Date().toISOString();
           const finalModel: DocModel = {
-            ...merged.model,
+            ...sanitizePptModel(merged.model),
             id: job.app_id,
             version: 1,
             createdAt: merged.model.createdAt ?? generatedAt,
@@ -2265,6 +2265,7 @@ function withPptPartBudget(userPrompt: string, part: PptPart): string {
     '每页保留 2~3 个正文块，notes 写 45~80 字可直接照读的话，并包含追问或学生易错点。\n' +
     '本段必须至少 1 个短数据 chart，charts 的 categories / values 各不超过 5 项。\n' +
     '禁止输出 data:image/svg+xml、外链图片或长 SVG；图表数据保持简短。\n' +
+    '禁止出现“我按某年级理解”“不对可以让老师改”“AI生成”等模型自述；最后一页写成教师可直接授课的核对清单。\n' +
     '只输出一个完整 JSON 对象，不要解释，不要输出代码块以外的文字。'
   );
 }
@@ -2289,6 +2290,56 @@ function parsePptPart(raw: string, part: PptPart): Record<string, unknown> {
     throw new AppError('VALIDATE_FAILED', `PPT 第 ${part} 段缺少 slides，请重试`);
   }
   return model;
+}
+
+/** 判断一段文字是否属于模型自述、道歉或让教师代为修改的元话语。 */
+function isPptSelfTalk(value: string): boolean {
+  const text = value.trim();
+  if (!text) return false;
+  return (
+    /我\s*按[^，。！？\n]{0,30}(?:理解|处理|假设|判断)/.test(text) ||
+    /(?:不对|不合适|如果不对)[^，。！？\n]{0,24}(?:老师|教师)[^，。！？\n]{0,18}(?:改|调整)/.test(text) ||
+    /^(?:我|本人)(?:可以|会|已|按)[^，。！？\n]{0,40}(?:修改|调整|理解|处理|生成)/.test(text) ||
+    /^(?:AI|模型)(?:生成|理解|认为|建议)[^，。！？\n]{0,50}/.test(text)
+  );
+}
+
+/** 移除句子级模型自述，保留同一段内真正的教学内容。 */
+function stripPptSelfTalk(value: string): string {
+  const segments = value.split(/(?<=[。！？\n])/);
+  return segments
+    .filter((segment) => !isPptSelfTalk(segment))
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sanitizePptBlock(block: DocBlock): DocBlock {
+  const text = typeof block.text === 'string' ? stripPptSelfTalk(block.text) : block.text;
+  const caption = typeof block.caption === 'string' ? stripPptSelfTalk(block.caption) : block.caption;
+  const items = block.items?.map(stripPptSelfTalk).filter(Boolean);
+  const header = block.header?.map(stripPptSelfTalk).filter(Boolean);
+  const rows = block.rows
+    ?.map((row) => row.map(stripPptSelfTalk).filter(Boolean))
+    .filter((row) => row.length > 0);
+  return { ...block, text, caption, items, header, rows };
+}
+
+/** 清掉课件里的 AI 自述和低价值道歉，只留下可核查的教学事实。 */
+function sanitizePptModel(model: DocModel): DocModel {
+  const verifyHints = (model.verifyHints ?? [])
+    .map((hint) => hint.trim())
+    .filter((hint) => hint.length > 0 && !isPptSelfTalk(hint));
+  return {
+    ...model,
+    blocks: model.blocks.map(sanitizePptBlock),
+    slides: model.slides?.map((slide) => ({
+      ...slide,
+      body: slide.body.map(sanitizePptBlock),
+      notes: typeof slide.notes === 'string' ? stripPptSelfTalk(slide.notes) : slide.notes,
+    })),
+    verifyHints,
+  };
 }
 
 /** 合并各 PPT 分段，并统一重排页码。 */
