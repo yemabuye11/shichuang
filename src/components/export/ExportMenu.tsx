@@ -43,7 +43,23 @@ export interface ExportMenuProps {
 interface PptxFallback {
   url: string;
   fileName: string;
+  blob: Blob;
 }
+
+interface SaveFileHandle {
+  createWritable(): Promise<{
+    write(data: Blob): Promise<void>;
+    close(): Promise<void>;
+  }>;
+}
+
+type ShowSaveFilePicker = (options: {
+  suggestedName: string;
+  types: Array<{
+    description: string;
+    accept: Record<string, string[]>;
+  }>;
+}) => Promise<SaveFileHandle>;
 
 /** 当前正在进行的导出动作（用于禁用与 loading 态）。 */
 type Busy = 'pptx' | 'docx' | 'link' | null;
@@ -79,7 +95,7 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
       releaseFallbackUrl(fallbackUrlRef.current);
       const url = exportService.triggerPptxDownload(result.blob, result.fileName);
       fallbackUrlRef.current = url;
-      setPptxFallback({ url, fileName: result.fileName });
+      setPptxFallback({ url, fileName: result.fileName, blob: result.blob });
       toast.success('PPTX 已生成');
     } catch (error) {
       console.error('[ExportMenu] PPTX export failed', error);
@@ -87,6 +103,39 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
     } finally {
       setBusy(null);
     }
+  };
+
+  const handleManualPptxSave = async (): Promise<void> => {
+    if (!pptxFallback) return;
+    const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePicker }).showSaveFilePicker;
+    if (picker) {
+      try {
+        const handle = await picker({
+          suggestedName: pptxFallback.fileName,
+          types: [{
+            description: 'PowerPoint 课件',
+            accept: {
+              'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+            },
+          }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(pptxFallback.blob);
+        await writable.close();
+        toast.success('PPTX 已保存');
+        closePptxFallback();
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        console.warn('[ExportMenu] Save picker failed, falling back to download link', error);
+      }
+    }
+    const anchor = document.createElement('a');
+    anchor.href = pptxFallback.url;
+    anchor.download = pptxFallback.fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   };
 
   const handleDocx = async (): Promise<void> => {
@@ -154,9 +203,7 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
         <DialogActions>
           <Button onClick={closePptxFallback}>关闭</Button>
           <Button
-            component="a"
-            href={pptxFallback?.url}
-            download={pptxFallback?.fileName}
+            onClick={() => void handleManualPptxSave()}
             variant="contained"
             startIcon={<FileDownloadIcon />}
           >
