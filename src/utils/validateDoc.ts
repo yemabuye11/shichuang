@@ -326,11 +326,12 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
     }).join(' ').trim().length;
     const contentUnits = countPptContentUnits(body);
 
-    if (index > 0 && contentUnits < 2) {
+    const isCover = index === 0 || slide.layout === 'title';
+    if (!isCover && contentUnits < 2) {
       errors.push(`第 ${index + 1} 页内容单元不足：至少需要 2 个正文块、列表项或表格行`);
     }
-    if (index > 0 && bodyChars < PPT_MIN_BODY_CHARS) errors.push(`第 ${index + 1} 页内容过薄：正文少于 ${PPT_MIN_BODY_CHARS} 字`);
-    if (index > 0 && (slide.notes ?? '').trim().length < PPT_MIN_NOTES_CHARS) errors.push(`第 ${index + 1} 页演讲者备注过短：至少需要 ${PPT_MIN_NOTES_CHARS} 字`);
+    if (!isCover && bodyChars < PPT_MIN_BODY_CHARS) errors.push(`第 ${index + 1} 页内容过薄：正文少于 ${PPT_MIN_BODY_CHARS} 字`);
+    if (!isCover && (slide.notes ?? '').trim().length < PPT_MIN_NOTES_CHARS) errors.push(`第 ${index + 1} 页演讲者备注过短：至少需要 ${PPT_MIN_NOTES_CHARS} 字`);
     if (!slide.title || slide.title.trim().length === 0) errors.push(`第 ${index + 1} 页缺少标题`);
   });
 

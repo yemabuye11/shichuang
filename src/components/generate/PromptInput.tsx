@@ -20,6 +20,8 @@ export interface PromptInputProps {
   helper?: string;
   /** 输入框 id，便于 label 关联。 */
   id?: string;
+  /** 最少字符数；传 0 可用于选填输入。 */
+  minLength?: number;
 }
 
 export function PromptInput({
@@ -31,9 +33,10 @@ export function PromptInput({
   error = '',
   helper = '',
   id = 'prompt-input',
+  minLength = MIN_PROMPT_LENGTH,
 }: PromptInputProps): JSX.Element {
   const length = value.length;
-  const tooShort = !error && length > 0 && length < MIN_PROMPT_LENGTH;
+  const tooShort = !error && minLength > 0 && length > 0 && length < minLength;
 
   return (
     <Box>
@@ -74,7 +77,7 @@ export function PromptInput({
           component="div"
           sx={{ fontSize: 13, color: error ? 'error.main' : 'text.secondary', lineHeight: 1.5 }}
         >
-          {error || (tooShort ? `再多写几个字吧（至少 ${MIN_PROMPT_LENGTH} 个字）` : helper)}
+          {error || (tooShort ? `再多写几个字吧（至少 ${minLength} 个字）` : helper)}
         </Typography>
         <Typography
           component="div"

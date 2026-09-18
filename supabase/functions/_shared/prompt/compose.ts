@@ -72,6 +72,8 @@ export interface ComposeDocInput {
   textbookContext?: string;
   /** 上传的参考模板正文（教师上传文本模板，截断后注入 user 消息，沿用其章节结构与排版风格）。 */
   templateContent?: string;
+  /** 导入的大纲正文（作为最高优先级的页面结构和知识点清单）。 */
+  outlineContent?: string;
   /** 参考公开课标题（注入提示词让内容更厚实）。 */
   referenceTitle?: string;
   /** 参考公开课来源。 */
@@ -222,6 +224,18 @@ export async function composeDoc(input: ComposeDocInput): Promise<Composed> {
     userPrompt +=
       '\n\n---\n\n# 参考模板结构（请尽量沿用其章节结构与排版风格，但内容须针对本次需求重新撰写，不要照抄）\n' +
       input.templateContent.slice(0, 6000);
+  }
+
+  // 导入大纲优先级高于参考模板：教师已经给出内容脉络时，模型只负责补齐讲解、
+  // 例题、活动和备注，不再自行增删主题或把大纲改写成另一套固定栏目。
+  if (input.outlineContent && input.outlineContent.trim().length > 0) {
+    userPrompt +=
+      '\n\n---\n\n# 导入大纲（最高优先级内容源）\n' +
+      '以下内容是本节课的目录和知识点来源。必须保持原有顺序、标题含义、知识结构和关键数字，' +
+      '不得另起一套章节，也不得删掉大纲中的例题、活动、练习或作业要求。\n' +
+      '请把每个大纲条目扩写成可直接授课的幻灯片内容：补充必要的解释、示范步骤、课堂追问和教师备注；' +
+      '内容不足时做教学化补全，内容过多时按知识点合并，不能只把原句复制成页面标题。\n\n' +
+      input.outlineContent.slice(0, 24_000);
   }
 
   // 参考公开课：让内容更厚实（有具体例题、课堂活动与板书/互动设计，达到优质课标准）。

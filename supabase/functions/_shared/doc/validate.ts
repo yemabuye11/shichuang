@@ -435,7 +435,12 @@ function validatePptQuality(
       .trim().length;
     const contentUnits = countPptContentUnits(body);
 
-    const skipContentChecks = options.skipFirstSlideQuality === true && index === 0;
+    // 封面只承担标题、课题信息和课堂引子，不应被正文页的字符密度门槛误杀。
+    // 分段生成时跳过第 1 段封面；整份合并校验时同样跳过 title 封面或第 1 页。
+    const isCover = index === 0 || slide.layout === 'title';
+    const skipContentChecks =
+      (options.skipFirstSlideQuality === true && index === 0) ||
+      (options.fullPptQuality && isCover);
     if (!skipContentChecks && contentUnits < 2) {
       errors.push(`第 ${index + 1} 页内容单元不足：至少需要 2 个正文块、列表项或表格行`);
     }

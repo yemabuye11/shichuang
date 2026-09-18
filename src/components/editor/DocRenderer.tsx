@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Box, Button, IconButton, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
@@ -12,6 +13,7 @@ import { ChartBlockView } from '@/components/editor/ChartBlockView';
 import { BloomChip, PedagogySummary } from '@/components/editor/BloomChip';
 import { blocksToText } from '@/utils/geometryKernel';
 import { isEarlyChildhoodPpt } from '@/utils/pptAudience';
+import { getPptListItems, getPptSlideLayout, isPptVisualBlock } from '@/utils/pptLayout';
 
 /**
  * 文档模型渲染器（一份 DocModel → 网页呈现）。
@@ -206,10 +208,7 @@ function renderBlockInner(block: DocBlock, friendlyCharts: boolean): JSX.Element
 
 /** 判断块是否是可投屏的真实教学图示。 */
 function isSlideVisual(block: DocBlock): boolean {
-  return (
-    block.type === 'chart' ||
-    (block.type === 'image' && typeof block.src === 'string' && block.src.startsWith('data:image/'))
-  );
+  return isPptVisualBlock(block);
 }
 
 /** 判断是否适合用双栏承载。 */
@@ -229,6 +228,172 @@ function slideBlockText(block: DocBlock): string {
   if (block.type === 'chart') return block.caption ?? block.chart?.title ?? block.chart?.expression ?? '';
   if (block.type === 'image') return block.caption ?? '';
   return block.text ?? block.caption ?? '';
+}
+
+/** 列表型页面：短词做成词汇卡，步骤做成流程条，其余做成要点卡。 */
+function SlideListContent({ block, friendlyCharts }: { block: DocBlock; friendlyCharts: boolean }): JSX.Element {
+  const items = (block.items ?? []).map((item) => item.trim()).filter(Boolean);
+  const process = Boolean(
+    block.ordered ||
+    items.some((item) => /^(?:先|再|然后|接着|最后|第一步|第二步|第三步)/.test(item)),
+  );
+  const vocabulary = items.length >= 2 && items.length <= 5 && items.every((item) => item.length <= 6);
+
+  if (process && items.length > 0) {
+    return (
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: {
+            xs: '1fr',
+            md: items.length <= 3 ? `repeat(${items.length}, minmax(0, 1fr))` : 'repeat(2, minmax(0, 1fr))',
+          },
+          gap: { xs: 1.1, md: 1.4 },
+          alignItems: 'stretch',
+        }}
+      >
+        {items.map((item, index) => (
+          <Box
+            key={`${block.id}-${index}`}
+            sx={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.25,
+              minHeight: { xs: 72, md: 88 },
+              px: 1.5,
+              py: 1.25,
+              borderRadius: 3,
+              bgcolor: friendlyCharts ? ['#F0F9FF', '#FFF7ED', '#F0FDF4', '#FDF2F8'][index % 4] : '#F7F9FD',
+              border: '1.5px solid',
+              borderColor: friendlyCharts ? '#FFFFFF' : '#DDE6F3',
+              boxShadow: '0 7px 18px rgba(55,75,100,0.07)',
+              gridColumn:
+                index === items.length - 1 && items.length % 2 === 1 && items.length > 1
+                  ? '1 / -1'
+                  : undefined,
+            }}
+          >
+            <Box
+              sx={{
+                width: 38,
+                height: 38,
+                flex: '0 0 38px',
+                display: 'grid',
+                placeItems: 'center',
+                borderRadius: '50%',
+                bgcolor: friendlyCharts ? '#F472B6' : '#2F6BFF',
+                color: '#fff',
+                fontSize: 16,
+                fontWeight: 900,
+              }}
+            >
+              {index + 1}
+            </Box>
+            <Typography sx={{ flex: 1, fontSize: { xs: 15, md: 17 }, lineHeight: 1.5, fontWeight: 700, color: '#30445E' }}>
+              {item}
+            </Typography>
+            {index < items.length - 1 ? (
+              <ArrowForwardIcon
+                sx={{
+                  display: { xs: 'none', md: items.length <= 3 ? 'block' : 'none' },
+                  position: 'absolute',
+                  right: -19,
+                  zIndex: 2,
+                  color: '#A9B7C9',
+                  fontSize: 22,
+                }}
+              />
+            ) : null}
+          </Box>
+        ))}
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: {
+          xs: 'repeat(2, minmax(0, 1fr))',
+          sm: items.length === 1 ? '1fr' : vocabulary ? 'repeat(2, minmax(0, 1fr))' : 'repeat(2, minmax(0, 1fr))',
+        },
+        gap: { xs: 1, sm: 1.25 },
+      }}
+    >
+      {items.map((item, index) => (
+        <Box
+          key={`${block.id}-${index}`}
+          sx={{
+            minHeight: vocabulary ? { xs: 88, md: 112 } : { xs: 74, md: 88 },
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.1,
+            px: { xs: 1.2, sm: 1.5 },
+            py: 1.2,
+            borderRadius: 3,
+            bgcolor: friendlyCharts ? ['#E8F6FF', '#FFF0F6', '#FFF7DE', '#EAF9EF'][index % 4] : '#F7F9FD',
+            border: '1.5px solid',
+            borderColor: friendlyCharts ? 'rgba(255,255,255,0.95)' : '#DDE6F3',
+            boxShadow: '0 7px 18px rgba(55,75,100,0.06)',
+            gridColumn:
+              index === items.length - 1 && items.length % 2 === 1
+                ? '1 / -1'
+                : undefined,
+          }}
+        >
+          {vocabulary ? (
+            <Typography
+              sx={{
+                width: 42,
+                height: 42,
+                flex: '0 0 42px',
+                display: 'grid',
+                placeItems: 'center',
+                borderRadius: 2,
+                bgcolor: '#fff',
+                color: friendlyCharts ? '#C84F86' : '#2F6BFF',
+                fontSize: 24,
+                fontWeight: 900,
+                lineHeight: 1,
+              }}
+            >
+              {item.slice(0, 1)}
+            </Typography>
+          ) : (
+            <Box
+              sx={{
+                width: 25,
+                height: 25,
+                flex: '0 0 25px',
+                display: 'grid',
+                placeItems: 'center',
+                borderRadius: '50%',
+                bgcolor: friendlyCharts ? '#DDF8E8' : '#E9EFFA',
+                color: friendlyCharts ? '#2F8A58' : '#2F6BFF',
+                fontSize: 12,
+                fontWeight: 900,
+              }}
+            >
+              {index + 1}
+            </Box>
+          )}
+          <Typography
+            sx={{
+              fontSize: vocabulary ? { xs: 17, md: 20 } : { xs: 14, md: 16.5 },
+              lineHeight: 1.45,
+              fontWeight: vocabulary ? 900 : 700,
+              color: '#344B66',
+              wordBreak: 'break-word',
+            }}
+          >
+            {item}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
 /** 课堂画布中的单块内容。 */
@@ -263,38 +428,7 @@ function SlideBlockContent({ block, friendlyCharts }: { block: DocBlock; friendl
       );
     }
     case 'list':
-      return (
-        <Stack spacing={0.9}>
-          {(block.items ?? []).map((item, i) => (
-            <Stack key={`${block.id}-${i}`} direction="row" spacing={1} alignItems="flex-start">
-              <Box
-                sx={{
-                  width: 22,
-                  height: 22,
-                  flex: '0 0 22px',
-                  mt: 0.15,
-                  borderRadius: '50%',
-                  bgcolor: friendlyCharts
-                    ? (block.ordered ? '#F472B6' : '#DDF8E8')
-                    : (block.ordered ? '#2F6BFF' : '#E9EFFA'),
-                  color: friendlyCharts
-                    ? (block.ordered ? '#fff' : '#2F8A58')
-                    : (block.ordered ? '#fff' : '#2F6BFF'),
-                  display: 'grid',
-                  placeItems: 'center',
-                  fontSize: 11.5,
-                  fontWeight: 800,
-                }}
-              >
-                {block.ordered ? i + 1 : '•'}
-              </Box>
-              <Typography sx={{ fontSize: { xs: 14, md: 17 }, lineHeight: 1.55, color: friendlyCharts ? '#344B66' : 'inherit' }}>
-                {item}
-              </Typography>
-            </Stack>
-          ))}
-        </Stack>
-      );
+      return <SlideListContent block={block} friendlyCharts={friendlyCharts} />;
     case 'table': {
       const header = block.header ?? [];
       const rows = block.rows ?? [];
@@ -454,7 +588,10 @@ function SlidesView({
   const isSection = slide.layout === 'section';
   const visualBlocks = slide.body.filter(isSlideVisual);
   const textBlocks = slide.body.filter((block) => !isSlideVisual(block));
-  const twoColumn = isTwoColumnSlide(slide, textBlocks);
+  const presentationLayout = getPptSlideLayout(slide);
+  const twoColumn =
+    presentationLayout === 'compare' ||
+    (!['steps', 'cards', 'vocabulary'].includes(presentationLayout) && isTwoColumnSlide(slide, textBlocks));
   const metaLine = [meta.subject, meta.grade, meta.textbook, meta.duration].filter(Boolean).join(' · ');
   const coverBackground = friendlyCharts ? '#FFF9ED' : '#16243A';
   const coverTitleColor = friendlyCharts ? '#24405F' : '#FFF';

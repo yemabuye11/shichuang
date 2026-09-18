@@ -17,11 +17,13 @@ import {
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { PromptInput } from '@/components/generate/PromptInput';
 import { TypeSelector } from '@/components/generate/TypeSelector';
 import { CategoryEntry } from '@/components/generate/CategoryEntry';
 import { DocTypeMultiSelect } from '@/components/generate/DocTypeMultiSelect';
+import { OutlineImporter, type OutlineDraft } from '@/components/generate/OutlineImporter';
 import { TemplateUploader, type TemplateFile } from '@/components/generate/TemplateUploader';
 import { TextbookCascade } from '@/components/generate/TextbookCascade';
 import { AdvancedOptionsPanel, EMPTY_ADVANCED, type AdvancedOptions } from '@/components/generate/AdvancedOptions';
@@ -43,6 +45,7 @@ import {
 import { REFUND_POLICY_TEXT } from '@/config/creditRules';
 import { openCourseResources, type OpenCourseResource } from '@/data/openCourseResources';
 import { uuid } from '@/utils/hash';
+import { inferOutlineTeachingContext } from '@/utils/outlineImport';
 import * as creditService from '@/services/creditService';
 import { isAppType, type AppType } from '@/types/enums';
 import type { Category, DocType } from '@/types/doc';
@@ -69,6 +72,9 @@ export function GeneratePage(): JSX.Element {
   const location = useLocation();
 
   const [prompt, setPrompt] = useState('');
+  const [creationMode, setCreationMode] = useState<'idea' | 'outline'>('idea');
+  const [outline, setOutline] = useState<OutlineDraft | null>(null);
+  const previousDocTypesRef = useRef<DocType[]>(['lesson_plan']);
   const [category, setCategory] = useState<Category>('app');
   const [appType, setAppType] = useState<AppType>('auto');
   // 文档类改为多选：一次可生成多种格式，积分分开计算（野马需求）。
@@ -183,8 +189,30 @@ export function GeneratePage(): JSX.Element {
 
   const handleSubmit = (): void => {
     const text = prompt.trim();
-    if (text.length < MIN_PROMPT_LENGTH) {
+    const outlineText = creationMode === 'outline' ? outline?.content.trim() ?? '' : '';
+    const derivedPrompt = outlineText
+      .split('\n')
+      .map((line) =>
+        line
+          .replace(/^#+\s*/, '')
+          .replace(/^第\s*\d+\s*页\s*[｜|:：-]?\s*/, '')
+          .trim()
+      )
+      .find(Boolean);
+    const derivedOutlinePrompt = derivedPrompt
+      ? `${derivedPrompt.slice(0, 80)}${derivedPrompt.length < 4 ? ' 课件' : ''}`
+      : '';
+    const effectivePrompt = text || derivedOutlinePrompt;
+    if (creationMode === 'outline' && outlineText.length < 20) {
+      setError('请先粘贴大纲，或导入 PPTX / DOCX / 文本文件');
+      return;
+    }
+    if (creationMode === 'idea' && text.length < MIN_PROMPT_LENGTH) {
       setError(`请简单描述一下你要做什么（至少 ${MIN_PROMPT_LENGTH} 个字）`);
+      return;
+    }
+    if (!effectivePrompt) {
+      setError('请补一句课题或生成要求');
       return;
     }
     if (!user) {
@@ -196,7 +224,7 @@ export function GeneratePage(): JSX.Element {
 
     const jobId = uuid();
     const common = {
-      prompt: text,
+      prompt: effectivePrompt,
       subject: advanced.subject || undefined,
       grade: advanced.grade || undefined,
       textbook: advanced.textbook || undefined,
@@ -217,6 +245,7 @@ export function GeneratePage(): JSX.Element {
             textbookVersionId,
             textbookContext: chapter.trim() || undefined,
             templateContent: selectedTemplate?.content?.slice(0, 16000) || undefined,
+            outlineContent: outlineText || undefined,
             referenceTitle: referenceCourse?.title || undefined,
             referenceSource: referenceCourse?.source || undefined,
           }
@@ -261,33 +290,113 @@ export function GeneratePage(): JSX.Element {
       </Typography>
 
       <Stack spacing={2.5} sx={{ mt: 2.5 }}>
-        {/* ---- PRIMARY 输入：大文本框（始终在最前，不做向导包裹） ---- */}
-        <PromptInput
-          value={prompt}
-          onChange={(v) => {
-            setPrompt(v);
-            if (error) setError('');
-          }}
-          minRows={4}
-          error={error}
-          helper="描述得越具体，效果越好：说清 学科 + 年级 + 玩法 + 题量"
-          id="generate-prompt"
-        />
-
         {/* ---- 产物大类切换 ---- */}
         <CategoryEntry
           value={category}
           onChange={(c) => {
             setCategory(c);
             setError('');
+            if (c === 'doc' && creationMode === 'outline') setDocTypes(['ppt']);
           }}
         />
 
         {category === 'doc' ? (
           <>
             <Box>
-              <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>文档类型（可多选）</Typography>
-              <DocTypeMultiSelect value={docTypes} onChange={setDocTypes} />
+              <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>生成方式</Typography>
+              <ToggleButtonGroup
+                size="small"
+                exclusive
+                value={creationMode}
+                onChange={(_event, value: 'idea' | 'outline' | null) => {
+                  if (!value) return;
+                  setCreationMode(value);
+                  setError('');
+                  if (value === 'outline') {
+                    previousDocTypesRef.current = docTypes;
+                    setDocTypes(['ppt']);
+                  } else if (docTypes.length === 1 && docTypes[0] === 'ppt') {
+                    setDocTypes(previousDocTypesRef.current.length > 0 ? previousDocTypesRef.current : ['lesson_plan']);
+                  }
+                }}
+                sx={{ width: '100%' }}
+              >
+                <ToggleButton value="idea" sx={{ flex: 1, gap: 0.75 }}>
+                  <AutoAwesomeIcon fontSize="small" />
+                  一句话生成
+                </ToggleButton>
+                <ToggleButton value="outline" sx={{ flex: 1, gap: 0.75 }}>
+                  <UploadFileIcon fontSize="small" />
+                  导入大纲
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
+
+            {creationMode === 'outline' ? (
+              <Box>
+                <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>大纲内容</Typography>
+                <OutlineImporter
+                  value={outline}
+                  onChange={(next) => {
+                    setOutline(next);
+                    if (error) setError('');
+                    if (next?.content) {
+                      const inferred = inferOutlineTeachingContext(next.content, next.name ?? '');
+                      setAdvanced((prev) => ({
+                        ...prev,
+                        subject: prev.subject || inferred.subject || '',
+                        grade: prev.grade || inferred.grade || '',
+                      }));
+                    }
+                  }}
+                />
+                {advanced.subject || advanced.grade ? (
+                  <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.75 }}>
+                    {advanced.grade ? <Chip size="small" label={`年级：${advanced.grade}`} color="primary" variant="outlined" /> : null}
+                    {advanced.subject ? <Chip size="small" label={`学科：${advanced.subject}`} color="primary" variant="outlined" /> : null}
+                  </Stack>
+                ) : null}
+                <Box sx={{ mt: 2 }}>
+                  <PromptInput
+                    value={prompt}
+                    onChange={(value) => {
+                      setPrompt(value);
+                      if (error) setError('');
+                    }}
+                    minRows={2}
+                    minLength={0}
+                    error={error}
+                    helper="补充要求（选填）"
+                    id="generate-prompt"
+                  />
+                </Box>
+              </Box>
+            ) : (
+              <PromptInput
+                value={prompt}
+                onChange={(value) => {
+                  setPrompt(value);
+                  if (error) setError('');
+                }}
+                minRows={4}
+                error={error}
+                helper="描述得越具体，效果越好：说清 学科 + 年级 + 玩法 + 题量"
+                id="generate-prompt"
+              />
+            )}
+
+            <Box>
+              {creationMode === 'outline' ? (
+                <>
+                  <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>输出格式</Typography>
+                  <Chip label="PPT 课件" color="primary" variant="outlined" />
+                </>
+              ) : (
+                <>
+                  <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>文档类型（可多选）</Typography>
+                  <DocTypeMultiSelect value={docTypes} onChange={setDocTypes} />
+                </>
+              )}
             </Box>
 
             {/* 时长 quick chips：仅在需要时给出，避免把整册 / 整学期都做掉 */}
@@ -356,9 +465,22 @@ export function GeneratePage(): JSX.Element {
               }}
               loading={textbookLoading}
             />
+
+            <AdvancedOptionsPanel value={advanced} onChange={setAdvanced} />
           </>
         ) : (
           <>
+            <PromptInput
+              value={prompt}
+              onChange={(value) => {
+                setPrompt(value);
+                if (error) setError('');
+              }}
+              minRows={4}
+              error={error}
+              helper="描述得越具体，效果越好：说清 学科 + 年级 + 玩法 + 题量"
+              id="generate-prompt"
+            />
             <Box>
               <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>应用类型</Typography>
               <TypeSelector value={appType} onChange={setAppType} variant="grid" />
@@ -442,7 +564,9 @@ export function GeneratePage(): JSX.Element {
           {submitting
             ? '正在开始…'
             : category === 'doc'
-              ? `生成${getDocTypeLabel(docTypes[0])}（${cost} 积分）`
+              ? creationMode === 'outline'
+                ? `按大纲生成 PPT（${cost} 积分）`
+                : `生成${getDocTypeLabel(docTypes[0])}（${cost} 积分）`
               : `生成应用（${cost} 积分）`}
         </Button>
 

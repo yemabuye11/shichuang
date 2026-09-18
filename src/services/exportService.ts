@@ -17,8 +17,10 @@ import {
   friendlyChartLabels,
   friendlyVisualKind,
   isEarlyChildhoodPpt,
+  sanitizeEarlyPptModel,
   type FriendlyVisualKind,
 } from '@/utils/pptAudience';
+import { getPptListItems } from '@/utils/pptLayout';
 
 // ---------------------------------------------------------------------------
 // 导出选项
@@ -624,6 +626,98 @@ function addTableToSlide(
   return true;
 }
 
+function isProcessList(block: DocBlock): boolean {
+  const items = getPptListItems([block]);
+  return Boolean(
+    block.ordered ||
+    items.some((item) => /^(?:先|再|然后|接着|最后|第一步|第二步|第三步)/.test(item)),
+  );
+}
+
+/** 把 2~5 条短内容排成卡片或流程图，避免整页缩成一段文字。 */
+function addListCardsToSlide(
+  slide: any,
+  block: DocBlock,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  friendlyCharts: boolean,
+): boolean {
+  const items = getPptListItems([block]).slice(0, 5);
+  if (items.length < 2) return false;
+
+  const process = isProcessList(block);
+  const vocabulary = items.every((item) => item.length <= 6);
+  const columns = process && items.length <= 3 ? items.length : 2;
+  const rows = Math.ceil(items.length / columns);
+  const gap = 0.2;
+  const baseCardW = (w - gap * (columns - 1)) / columns;
+  const cardH = (h - gap * (rows - 1)) / rows;
+  const fills = friendlyCharts
+    ? ['E8F6FF', 'FFF0F6', 'FFF7DE', 'EAF9EF', 'FCEFF8']
+    : ['F2F6FD', 'EEF3FB', 'F5F7FA', 'EFF5FF', 'F8FAFD'];
+  const accents = friendlyCharts
+    ? ['F472B6', '86EFAC', 'F6B94A', '7DD3FC', 'C084FC']
+    : ['2F6BFF', '1D4ED8', '0F766E', '7C3AED', 'C2410C'];
+
+  items.forEach((item, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const spanFull = columns === 2 && items.length % 2 === 1 && index === items.length - 1;
+    const cardW = spanFull ? w : baseCardW;
+    const cardX = spanFull ? x : x + col * (baseCardW + gap);
+    const cardY = y + row * (cardH + gap);
+    slide.addShape('roundRect', {
+      x: cardX,
+      y: cardY,
+      w: cardW,
+      h: cardH,
+      rectRadius: 0.1,
+      fill: { color: fills[index % fills.length] },
+      line: { color: 'FFFFFF', pt: 1.1 },
+      shadow: { type: 'outer', color: '8FA4BC', blur: 3, angle: 45, distance: 2, opacity: 0.12 },
+    });
+    slide.addShape('ellipse', {
+      x: cardX + 0.2,
+      y: cardY + Math.max(0.17, cardH / 2 - 0.25),
+      w: 0.5,
+      h: 0.5,
+      fill: { color: accents[index % accents.length] },
+      line: { color: accents[index % accents.length], pt: 0.5 },
+    });
+    slide.addText(String(index + 1), {
+      x: cardX + 0.2,
+      y: cardY + Math.max(0.17, cardH / 2 - 0.25),
+      w: 0.5,
+      h: 0.5,
+      fontFace: 'Aptos',
+      fontSize: vocabulary ? 15 : 12,
+      bold: true,
+      color: 'FFFFFF',
+      align: 'center',
+      valign: 'mid',
+      margin: 0,
+    });
+    slide.addText(item, {
+      x: cardX + 0.82,
+      y: cardY + 0.12,
+      w: Math.max(0.5, cardW - 1.0),
+      h: cardH - 0.24,
+      fontFace: 'Microsoft YaHei',
+      fontSize: vocabulary ? 20 : items.length >= 4 ? 15 : 17,
+      bold: vocabulary || process,
+      color: '344B66',
+      align: 'left',
+      valign: 'mid',
+      margin: 0,
+      fit: 'shrink',
+      breakLineOnOverflow: true,
+    });
+  });
+  return true;
+}
+
 /** 在指定区域渲染一组文本、表格和提示块。 */
 function addBlocksToRect(
   slide: any,
@@ -632,9 +726,37 @@ function addBlocksToRect(
   y: number,
   w: number,
   h: number,
+  friendlyCharts: boolean,
 ): boolean {
   const tableBlocks = blocks.filter((block) => block.type === 'table');
   const otherBlocks = blocks.filter((block) => block.type !== 'table' && block.type !== 'chart' && block.type !== 'image');
+  const listBlocks = blocks.filter((block) => block.type === 'list');
+  const headingBlocks = blocks.filter((block) => block.type === 'heading');
+  const nonListBlocks = blocks.filter((block) => block.type !== 'list' && block.type !== 'heading');
+  if (listBlocks.length === 1 && nonListBlocks.length === 0) {
+    let listY = y;
+    let listH = h;
+    if (headingBlocks.length > 0) {
+      const headingText = headingBlocks.map(blockToSlideText).filter(Boolean).join(' ');
+      if (headingText) {
+        slide.addText(headingText, {
+          x,
+          y,
+          w,
+          h: 0.38,
+          fontFace: 'Microsoft YaHei',
+          fontSize: 16,
+          bold: true,
+          color: PPT.accent,
+          margin: 0,
+          fit: 'shrink',
+        });
+        listY += 0.5;
+        listH -= 0.5;
+      }
+    }
+    return addListCardsToSlide(slide, listBlocks[0], x, listY, w, listH, friendlyCharts);
+  }
   const textValue = otherBlocks.map(blockToSlideText).filter(Boolean).join('\n\n');
 
   if (tableBlocks.length === 1 && otherBlocks.length === 0) {
@@ -694,8 +816,8 @@ function addSlideBody(
       h: 4.75,
       line: { color: 'DCE4F0', pt: 1 },
     });
-    addBlocksToRect(slide, left, 0.72, 1.48, 5.6, 4.95);
-    addBlocksToRect(slide, right, 7.02, 1.48, 5.55, 4.95);
+    addBlocksToRect(slide, left, 0.72, 1.48, 5.6, 4.95, friendlyCharts);
+    addBlocksToRect(slide, right, 7.02, 1.48, 5.55, 4.95, friendlyCharts);
     return;
   }
 
@@ -703,7 +825,7 @@ function addSlideBody(
     const visual = visuals[0];
     const textWidth = text.length > 0 ? 5.15 : 0;
     if (textValue) {
-      addBlocksToRect(slide, text, 0.72, 1.5, textWidth, 4.95);
+      addBlocksToRect(slide, text, 0.72, 1.5, textWidth, 4.95, friendlyCharts);
     }
     const visualX = textValue ? 6.25 : 1.2;
     const visualW = textValue ? 6.35 : 10.9;
@@ -729,7 +851,15 @@ function addSlideBody(
   }
 
   if (hasTable) {
-    addBlocksToRect(slide, text, 0.72, 1.48, 11.9, 4.95);
+    addBlocksToRect(slide, text, 0.72, 1.48, 11.9, 4.95, friendlyCharts);
+    return;
+  }
+
+  if (
+    text.some((block) => block.type === 'list') &&
+    text.every((block) => block.type === 'list' || block.type === 'heading')
+  ) {
+    addBlocksToRect(slide, text, 0.72, 1.48, 11.9, 4.95, friendlyCharts);
     return;
   }
 
@@ -822,7 +952,7 @@ function addFriendlyCoverMotif(slide: any): void {
  * @param opts 导出选项（含网页版地址）。
  */
 export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Promise<PptxExportResult> {
-  model = await preparePptxImages(model);
+  model = sanitizeEarlyPptModel(await preparePptxImages(model));
   const friendlyCharts = isEarlyChildhoodPpt(model.meta?.grade);
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();

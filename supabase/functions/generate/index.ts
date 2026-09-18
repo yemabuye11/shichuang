@@ -291,6 +291,8 @@ interface GenerateBody {
   publishToLibrary?: boolean;
   /** 上传的参考模板正文（教师上传文本模板，截断后注入）。 */
   templateContent?: string;
+  /** 导入的大纲正文（PPTX / DOCX / 文本，作为内容结构最高优先级）。 */
+  outlineContent?: string;
   /** 参考公开课标题（注入提示词让内容更厚实）。 */
   referenceTitle?: string;
   /** 参考公开课来源。 */
@@ -321,6 +323,8 @@ interface PptResumeMeta {
   readonly promptVersion: string;
   readonly systemPrompt: string;
   readonly userPrompt: string;
+  /** 本次是否导入教师大纲；分段提示词据此决定结构约束。 */
+  readonly hasOutline: boolean;
   readonly subject?: string;
   readonly grade?: string;
   readonly modelKey: string;
@@ -681,6 +685,7 @@ function createPptResumableResponse(
             difficulty: body.difficulty,
             textbookContext,
             templateContent: body.templateContent,
+            outlineContent: body.outlineContent,
             referenceTitle: body.referenceTitle,
             referenceSource: body.referenceSource,
           });
@@ -699,6 +704,7 @@ function createPptResumableResponse(
             // 可续跑链路把 18 页预算写入每一段自己的提示词，避免这里再重复
             // “固定输出 18 页”而让模型在单段请求里继续生成整份课件。
             userPrompt: composed.userPrompt,
+            hasOutline: Boolean(body.outlineContent?.trim()),
             modelKey: modelCfg?.id ?? '',
             runtimeModelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
             provider,
@@ -945,7 +951,7 @@ function createPptResumableResponse(
             userPrompt: withPptPartBudget(meta.userPrompt, part as PptPart, {
               subject: meta.subject,
               grade: meta.grade,
-            }),
+            }, meta.hasOutline),
             maxOutputTokens: meta.maxOutputTokens,
             temperature: meta.temperature,
           },
@@ -1290,6 +1296,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
               difficulty: body.difficulty,
               textbookContext,
               templateContent: body.templateContent,
+              outlineContent: body.outlineContent,
               referenceTitle: body.referenceTitle,
               referenceSource: body.referenceSource,
             });
@@ -1302,7 +1309,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             const budgetedUserPrompt = withDocOutputBudget(composed.userPrompt, f, {
               subject: body.subject,
               grade: body.grade,
-            });
+            }, Boolean(body.outlineContent?.trim()));
             const docMaxOutput = f === 'ppt' ? Math.min(maxOutput, PPT_OUTPUT_TOKEN_CAP) : maxOutput;
             const docTemperature = f === 'ppt' ? 0.35 : 0.7;
             const llmReq: LlmRequest = {
@@ -1350,7 +1357,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                       userPrompt: withPptPartBudget(budgetedUserPrompt, part, {
                         subject: body.subject,
                         grade: body.grade,
-                      }),
+                      }, Boolean(body.outlineContent?.trim())),
                       maxOutputTokens: partMaxOutput,
                       temperature: docTemperature,
                     },
@@ -2191,6 +2198,7 @@ function withDocOutputBudget(
   userPrompt: string,
   docType: string,
   context: { subject?: string; grade?: string } = {},
+  hasOutline = false,
 ): string {
   if (docType !== 'ppt') return userPrompt;
   const earlyChildhood = isEarlyChildhoodGrade(context.grade);
@@ -2204,11 +2212,14 @@ function withDocOutputBudget(
   const chineseRuleIndex = earlyChildhood ? 6 : 5;
   const schemaRuleIndex = earlyChildhood ? 7 : 6;
   const jsonRuleIndex = earlyChildhood ? 8 : 7;
+  const structureRule = hasOutline
+    ? '1. 固定输出 18 页，但页面主题、顺序和知识点必须优先映射教师导入的大纲：第 1 页做封面，后续按大纲顺序完整覆盖，再补小结与作业；不得用平台的固定栏目替换大纲主题，也不得遗漏大纲中的定义、例题、活动和练习；\n'
+    : '1. 固定输出 18 页：封面、学习目标、情境导入、初读任务、字词理解、2 个知识讲解、例题示范、跟做活动、易错提醒、基础练习、提高练习、迁移应用、课堂讨论、方法归纳、课堂小结、分层作业，最后 1 页写教师核对与课上机动提示；\n';
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 本次输出预算（最高优先级，覆盖前文的扩展性建议）\n' +
     '请在 12000 tokens 内完成完整 JSON，必须一口气闭合，不能截断：\n' +
-    '1. 固定输出 18 页：封面、学习目标、情境导入、初读任务、字词理解、2 个知识讲解、例题示范、跟做活动、易错提醒、基础练习、提高练习、迁移应用、课堂讨论、方法归纳、课堂小结、分层作业，最后 1 页写教师核对与课上机动提示；\n' +
+    structureRule +
     '2. 每页保留 2~4 个正文块，每页 notes 控制在 45~100 字，写教师可直接照读的话，并包含一个追问或学生易错点；\n' +
     visualRule +
     languageRule +
@@ -2232,6 +2243,7 @@ function withPptPartBudget(
   userPrompt: string,
   part: PptPart,
   context: { subject?: string; grade?: string } = {},
+  hasOutline = false,
 ): string {
   const first = [
     '1. 封面',
@@ -2293,12 +2305,17 @@ function withPptPartBudget(
   const languageRule = earlyChildhood
     ? `本段面向${context.grade ?? '小学低年级'}${context.subject ? ` ${context.subject}` : ''}课堂：句子短、字大、重点少；优先写学生能看见、能模仿、能开口说的内容；每页至少一个观察、朗读、表演、圈画、连线或口头表达任务。\n`
     : '';
+  const structureRule = hasOutline
+    ? `本段必须正好 ${expected} 页，对应导入大纲顺序中的第 ${(part - 1) * expected + 1}~${part * expected} 个主要环节；` +
+      '页标题要从大纲原意提炼，保留其中出现的关键词、定义、例题和活动。' +
+      '若大纲条目不足，可对当前条目补讲、举例或练习；若条目过多，只合并同一知识点，不能跳过大纲内容。\n'
+    : `本段必须正好 ${expected} 页，固定顺序：${pages.join('；')}。\n`;
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
     `这是完整 18 页课件的第 ${part} 段。你只输出 ${range}，` +
     '不要输出另一段，也不要重复封面或目录。\n' +
-    `本段必须正好 ${expected} 页，固定顺序：${pages.join('；')}。\n` +
+    structureRule +
     '只输出 PPT 必需字段：kind、meta、blocks、slides、version；本段 blocks 必须固定为 []。\n' +
     '所有教学内容只能写进 slides，禁止在 blocks 中重复一遍；禁止输出 verifyHints、createdAt、school 等非必需字段。\n' +
     'meta 只保留 title、subject、grade、textbook、duration、difficulty。\n' +
@@ -2363,7 +2380,61 @@ function stripPptSelfTalk(value: string): string {
     .trim();
 }
 
-function sanitizePptBlock(block: DocBlock): DocBlock {
+const EARLY_PPT_STATISTIC_TEXT = /数据|频率|次数|难度|预估|最多|最少|最高|最低|比例|趋势|统计|排名|其次|较少|较多|更常见|最常|少见|出现得/;
+
+/** 低龄课件里的 chart 只保留教学画面标签，彻底去掉统计语义。 */
+function normalizeEarlyPptChart(block: DocBlock): DocBlock {
+  const chart = block.chart;
+  if (block.type !== 'chart' || !chart) return block;
+
+  const rawLabels = chart.kind === 'bar'
+    ? (chart.categories ?? [])
+    : (chart.points ?? []).map((point) => String(point[0] ?? ''));
+  let labels = rawLabels
+    .map((item) => String(item).trim())
+    .filter((item) => item.length > 0 && !/^-?\d+(?:\.\d+)?$/.test(item))
+    .slice(0, 4);
+
+  if (labels.length < 2) {
+    labels = (block.caption ?? chart.title ?? '')
+      .split(/[、，,；;：:|\s]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0 && item.length <= 8)
+      .slice(0, 4);
+  }
+  if (labels.length < 2) labels = ['看一看', '说一说', '做一做'];
+
+  const originalTitle = chart.title ?? '看图找一找';
+  const title = EARLY_PPT_STATISTIC_TEXT.test(originalTitle) ? '看图找一找' : originalTitle;
+  const caption = block.caption && EARLY_PPT_STATISTIC_TEXT.test(block.caption)
+    ? `看一看，说一说：${labels.join('、')}`
+    : block.caption;
+
+  return {
+    ...block,
+    caption,
+    chart: {
+      kind: 'bar',
+      title,
+      categories: labels,
+      values: labels.map(() => 1),
+    },
+  };
+}
+
+/** 低龄课件备注不再复述图表里的统计结论，避免教师照着说出数据口径。 */
+function stripEarlyPptStatistics(value: string): string {
+  const fallback = '请学生观察画面，说一说自己的发现；教师继续追问，并帮助学生把话说完整。';
+  const cleaned = value
+    .split(/(?<=[。！？\n])/)
+    .filter((segment) => !EARLY_PPT_STATISTIC_TEXT.test(segment))
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned.length >= 30 ? cleaned : `${cleaned}${fallback}`;
+}
+
+function sanitizePptBlock(block: DocBlock, earlyChildhood: boolean): DocBlock {
   const text = typeof block.text === 'string' ? stripPptSelfTalk(block.text) : block.text;
   const caption = typeof block.caption === 'string' ? stripPptSelfTalk(block.caption) : block.caption;
   const items = block.items?.map(stripPptSelfTalk).filter(Boolean);
@@ -2371,21 +2442,27 @@ function sanitizePptBlock(block: DocBlock): DocBlock {
   const rows = block.rows
     ?.map((row) => row.map(stripPptSelfTalk).filter(Boolean))
     .filter((row) => row.length > 0);
-  return { ...block, text, caption, items, header, rows };
+  const sanitized = { ...block, text, caption, items, header, rows };
+  return earlyChildhood ? normalizeEarlyPptChart(sanitized) : sanitized;
 }
 
 /** 清掉课件里的 AI 自述和低价值道歉，只留下可核查的教学事实。 */
 function sanitizePptModel(model: DocModel): DocModel {
+  const earlyChildhood = isEarlyChildhoodGrade(model.meta?.grade);
   const verifyHints = (model.verifyHints ?? [])
     .map((hint) => hint.trim())
     .filter((hint) => hint.length > 0 && !isPptSelfTalk(hint));
   return {
     ...model,
-    blocks: model.blocks.map(sanitizePptBlock),
+    blocks: model.blocks.map((block) => sanitizePptBlock(block, earlyChildhood)),
     slides: model.slides?.map((slide) => ({
       ...slide,
-      body: slide.body.map(sanitizePptBlock),
-      notes: typeof slide.notes === 'string' ? stripPptSelfTalk(slide.notes) : slide.notes,
+      body: slide.body.map((block) => sanitizePptBlock(block, earlyChildhood)),
+      notes: typeof slide.notes === 'string'
+        ? earlyChildhood
+          ? stripEarlyPptStatistics(stripPptSelfTalk(slide.notes))
+          : stripPptSelfTalk(slide.notes)
+        : slide.notes,
     })),
     verifyHints,
   };

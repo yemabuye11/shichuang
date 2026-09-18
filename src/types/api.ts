@@ -28,6 +28,8 @@ export interface GenerateRequest {
   publishToLibrary?: boolean;
   /** 上传的参考模板正文（教师上传的 .txt/.md 等文本模板，截断后注入提示词；非文本文件仅传文件名提示）。 */
   templateContent?: string;
+  /** 导入的 PPT / 文档大纲正文；作为最高优先级的内容结构，不受提示词 500 字上限影响。 */
+  outlineContent?: string;
   /** 参考公开课标题（从首页公开课资源勾选，注入提示词让内容更厚实）。 */
   referenceTitle?: string;
   /** 参考公开课来源（如 B站/国家中小学智慧教育平台）。 */

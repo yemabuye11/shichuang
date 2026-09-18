@@ -1,5 +1,6 @@
 import type { DocModel, DocType } from '@/types/doc';
 import { isMockMode } from '@/config/env';
+import { sanitizeEarlyPptModel } from '@/utils/pptAudience';
 import * as mockStore from './mock/mockStore';
 import * as textbookService from './textbookService';
 
@@ -25,7 +26,7 @@ export async function loadDoc(docId: string): Promise<DocModel | null> {
     const app = st.apps.find((a) => a.id === docId);
     if (!app || app.category !== 'doc' || !app.docJson) return null;
     try {
-      return JSON.parse(app.docJson) as DocModel;
+      return sanitizeEarlyPptModel(JSON.parse(app.docJson) as DocModel);
     } catch {
       return null;
     }
@@ -38,10 +39,10 @@ export async function loadDoc(docId: string): Promise<DocModel | null> {
     const res = await fetch(url);
     if (!res.ok) return null;
     const model = (await res.json()) as DocModel;
-    return {
+    return sanitizeEarlyPptModel({
       ...model,
       version: st.doc_version ?? model.version ?? 1,
-    };
+    });
   } catch {
     return null;
   }
