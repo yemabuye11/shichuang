@@ -815,7 +815,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           }
 
           // ---- 7. 单次结算（覆盖所有格式累计 token / 成本）----
-          await sb.rpc('settle_generation', {
+          const settle = await sb.rpc('settle_generation', {
             p_job_id: jobId,
             p_tokens_in: totalIn,
             p_tokens_out: totalOut,
@@ -824,6 +824,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
             p_app_id: firstDoneAppId,
             p_ms: totalMs,
           });
+          if (settle.error) {
+            throw new AppError(
+              'STORE_FAILED',
+              `生成结算失败：${settle.error.message}`,
+            );
+          }
 
           send('stage', { stage: 'code', label: '生成文档内容', status: 'done' });
           send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
