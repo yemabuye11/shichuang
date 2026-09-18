@@ -50,7 +50,8 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
       toast.success('PPTX 已生成，开始下载');
     } catch (error) {
       console.error('[ExportMenu] PPTX export failed', error);
-      toast.error('导出 PPTX 失败，请重试');
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`导出 PPTX 失败：${message}`);
     } finally {
       setBusy(null);
     }
