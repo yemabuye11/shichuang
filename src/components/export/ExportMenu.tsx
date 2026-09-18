@@ -1,5 +1,14 @@
-import { useState } from 'react';
-import { Button, Menu, MenuItem } from '@mui/material';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Menu,
+  MenuItem,
+  Typography,
+} from '@mui/material';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import SlideshowIcon from '@mui/icons-material/Slideshow';
 import DescriptionIcon from '@mui/icons-material/Description';
@@ -31,23 +40,47 @@ export interface ExportMenuProps {
   renderUrl?: string;
 }
 
+interface PptxFallback {
+  url: string;
+  fileName: string;
+}
+
 /** 当前正在进行的导出动作（用于禁用与 loading 态）。 */
 type Busy = 'pptx' | 'docx' | 'link' | null;
 
 export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.Element {
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
   const [busy, setBusy] = useState<Busy>(null);
+  const [pptxFallback, setPptxFallback] = useState<PptxFallback | null>(null);
+  const fallbackUrlRef = useRef<string | null>(null);
   const toast = useToast();
 
   const fullRenderUrl = renderUrl ?? `${window.location.origin}${docRunPath(docId)}`;
+
+  const releaseFallbackUrl = (url: string | null): void => {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
+  useEffect(() => () => releaseFallbackUrl(fallbackUrlRef.current), []);
+
+  const closePptxFallback = (): void => {
+    setPptxFallback(null);
+    const url = fallbackUrlRef.current;
+    fallbackUrlRef.current = null;
+    releaseFallbackUrl(url);
+  };
 
   const handlePptx = async (): Promise<void> => {
     if (!model) return;
     setBusy('pptx');
     setAnchor(null);
     try {
-      await exportService.exportPptx(model, { renderUrl: fullRenderUrl });
-      toast.success('PPTX 已生成，开始下载');
+      const result = await exportService.exportPptx(model, { renderUrl: fullRenderUrl });
+      releaseFallbackUrl(fallbackUrlRef.current);
+      const url = exportService.triggerPptxDownload(result.blob, result.fileName);
+      fallbackUrlRef.current = url;
+      setPptxFallback({ url, fileName: result.fileName });
+      toast.success('PPTX 已生成');
     } catch (error) {
       console.error('[ExportMenu] PPTX export failed', error);
       toast.error('导出 PPTX 失败，请重试');
@@ -111,6 +144,26 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
           复制网页链接
         </MenuItem>
       </Menu>
+      <Dialog open={Boolean(pptxFallback)} onClose={closePptxFallback} fullWidth maxWidth="xs">
+        <DialogTitle>PPTX 已生成</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: 14, wordBreak: 'break-all' }}>
+            {pptxFallback?.fileName}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closePptxFallback}>关闭</Button>
+          <Button
+            component="a"
+            href={pptxFallback?.url}
+            download={pptxFallback?.fileName}
+            variant="contained"
+            startIcon={<FileDownloadIcon />}
+          >
+            保存 PPTX
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }

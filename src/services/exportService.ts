@@ -24,6 +24,14 @@ export interface ExportOptions {
   renderUrl?: string;
 }
 
+/** 浏览器端 PPTX 导出结果。 */
+export interface PptxExportResult {
+  /** 建议保存的文件名。 */
+  fileName: string;
+  /** 可直接下载的 PPTX Blob。 */
+  blob: Blob;
+}
+
 // ---------------------------------------------------------------------------
 // 映射规则（与 Edge `exportMap.ts` 对齐，浏览器端等价实现）
 // ---------------------------------------------------------------------------
@@ -197,8 +205,24 @@ function triggerDownload(blob: Blob, fileName: string): void {
   a.download = fileName;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
+}
+
+/** 触发下载后返回同一个 blob URL，供自动下载被拦截时提供手动保存入口。 */
+export function triggerPptxDownload(blob: Blob, fileName: string): string {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.target = '_self';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 1000);
+  return url;
 }
 
 const PPT = {
@@ -604,7 +628,7 @@ function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layo
  * @param model 文档模型。
  * @param opts 导出选项（含网页版地址）。
  */
-export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Promise<void> {
+export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Promise<PptxExportResult> {
   model = await preparePptxImages(model);
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();
@@ -734,13 +758,7 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
   const fileName = `${safeFileName(model.meta?.title)}.pptx`;
   const output = await pptx.write({ outputType: 'blob' });
   if (!(output instanceof Blob)) throw new Error('PPTX export did not return a Blob');
-  if (new URLSearchParams(window.location.search).has('pptxDebug')) {
-    (window as Window & { __shichuangPptxDebug?: { fileName: string; blob: Blob } }).__shichuangPptxDebug = {
-      fileName,
-      blob: output,
-    };
-  }
-  triggerDownload(output, fileName);
+  return { fileName, blob: output };
 }
 
 /**
