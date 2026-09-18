@@ -212,6 +212,105 @@ const PPT = {
   soft: 'F7F9FC',
 } as const;
 
+const PPTX_SVG_MAX_WIDTH = 1600;
+const PPTX_SVG_MAX_HEIGHT = 1200;
+
+/** 解出内联 SVG data URI 的原始 XML。 */
+function decodeSvgDataUri(src: string): string | null {
+  const comma = src.indexOf(',');
+  if (comma < 0) return null;
+  const header = src.slice(0, comma);
+  const payload = src.slice(comma + 1);
+  try {
+    if (/;base64/i.test(header)) {
+      const binary = atob(payload);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+    return decodeURIComponent(payload);
+  } catch {
+    return null;
+  }
+}
+
+/** 从 viewBox / width / height 推导适合导出的位图尺寸。 */
+function svgRasterSize(svg: string): { width: number; height: number } {
+  const viewBox = /viewBox=["']\s*[-\d.]+\s+[-\d.]+\s+([\d.]+)\s+([\d.]+)\s*["']/i.exec(svg);
+  const widthValue = /<svg[^>]*\bwidth=["']([\d.]+)/i.exec(svg)?.[1];
+  const heightValue = /<svg[^>]*\bheight=["']([\d.]+)/i.exec(svg)?.[1];
+  const sourceWidth = Number(viewBox?.[1] ?? widthValue ?? 800);
+  const sourceHeight = Number(viewBox?.[2] ?? heightValue ?? 450);
+  if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0) {
+    return { width: 1200, height: 675 };
+  }
+  const scale = Math.min(PPTX_SVG_MAX_WIDTH / sourceWidth, PPTX_SVG_MAX_HEIGHT / sourceHeight);
+  return {
+    width: Math.max(1, Math.round(sourceWidth * scale)),
+    height: Math.max(1, Math.round(sourceHeight * scale)),
+  };
+}
+
+/**
+ * 把内联 SVG 栅格化为 PNG。
+ *
+ * pptxgenjs 3.12 在浏览器里会尝试为 SVG 额外生成 PNG 回退图，但它会把
+ * `image/svg+xml;base64,...` 误拼成 PNG 数据并触发 image.onerror。教师课件里
+ * 有平台自动补齐的教学结构图，因此导出前必须先转成标准 PNG，不能依赖该回退。
+ */
+async function rasterizeSvgDataUri(src: string): Promise<string | null> {
+  const svg = decodeSvgDataUri(src);
+  if (!svg) return null;
+  const { width, height } = svgRasterSize(svg);
+  const blobUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('SVG image decode failed'));
+      image.src = blobUrl;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL('image/png');
+  } catch (error) {
+    console.warn('[exportService] SVG rasterization failed', error);
+    return null;
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
+/** 导出 PPTX 前把所有内联 SVG 转为 PNG，绕开 pptxgenjs 的 SVG 回退缺陷。 */
+async function preparePptxImages(model: DocModel): Promise<DocModel> {
+  const cache = new Map<string, Promise<string | null>>();
+  const convert = (src: string): Promise<string | null> => {
+    const cached = cache.get(src);
+    if (cached) return cached;
+    const task = rasterizeSvgDataUri(src);
+    cache.set(src, task);
+    return task;
+  };
+  const convertBlock = async (block: DocBlock): Promise<DocBlock> => {
+    if (block.type !== 'image' || !block.src?.startsWith('data:image/svg+xml')) return block;
+    const png = await convert(block.src);
+    return png ? { ...block, src: png } : { ...block, src: undefined };
+  };
+  const blocks = await Promise.all(model.blocks.map(convertBlock));
+  const slides = model.slides
+    ? await Promise.all(model.slides.map(async (slide) => ({
+      ...slide,
+      body: await Promise.all(slide.body.map(convertBlock)),
+    })))
+    : undefined;
+  return { ...model, blocks, slides };
+}
+
 /** 把 data URI 转成 pptxgenjs 可稳定识别的 base64 data。 */
 function toPptxDataUri(src: string): string | null {
   if (!src.startsWith('data:')) return null;
@@ -506,6 +605,7 @@ function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layo
  * @param opts 导出选项（含网页版地址）。
  */
 export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Promise<void> {
+  model = await preparePptxImages(model);
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
