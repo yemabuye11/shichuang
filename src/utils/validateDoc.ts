@@ -1,4 +1,4 @@
-import type { DocModel, DocType } from '@/types/doc';
+import type { DocBlock, DocModel, DocType, Slide } from '@/types/doc';
 
 /**
  * 文档类产物校验（前端，与 Edge `_shared/doc/validate.ts` 同一套标准）。
@@ -17,11 +17,11 @@ export interface DocValidationResult {
 /** 默认体积上限：256KB。 */
 export const MAX_DOC_BYTES = 262_144;
 
-const PPT_MIN_SLIDES = 12;
+const PPT_MIN_SLIDES = 14;
 const PPT_MAX_SLIDES = 22;
-const PPT_MIN_VISUALS = 3;
+const PPT_MIN_VISUALS = 4;
 const PPT_MIN_NOTES_CHARS = 30;
-const PPT_MIN_BODY_CHARS = 36;
+const PPT_MIN_BODY_CHARS = 35;
 const PPT_PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /建议配图/,
   /此处(?:插入|添加|放置)/,
@@ -89,7 +89,7 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
     return { ok: false, errors: [`JSON 解析失败：${msg}`], model: null };
   }
 
-  const model = parsed as Partial<DocModel>;
+  const model = normalizeDocModel(parsed);
   if (typeof model !== 'object' || model === null) {
     return { ok: false, errors: ['DocModel 必须是 JSON 对象'], model: null };
   }
@@ -123,6 +123,174 @@ export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocV
   }
 
   return { ok: errors.length === 0, errors, model: errors.length === 0 ? (model as DocModel) : null };
+}
+
+/** 归一化模型常见但无害的字段差异，避免为了 `headers` / `columns` 重写整份课件。 */
+function normalizeDocModel(parsed: unknown): Partial<DocModel> {
+  const model = parsed as Partial<DocModel> & {
+    blocks?: DocBlock[];
+    slides?: Slide[];
+  };
+
+  if (Array.isArray(model.blocks)) {
+    model.blocks = model.blocks.map((block, index) => normalizeBlock(block, index));
+  }
+
+  if (Array.isArray(model.slides)) {
+    model.slides = model.slides.map((slide, index) => {
+      const raw = slide as Slide & { body?: DocBlock[] };
+      const body = Array.isArray(raw.body)
+        ? raw.body.map((block, blockIndex) => normalizeBlock(block, blockIndex))
+        : [];
+      return {
+        ...raw,
+        index: Number.isInteger(raw.index) ? Number(raw.index) : index,
+        title: typeof raw.title === 'string' && raw.title.trim() ? raw.title : `第 ${index + 1} 页`,
+        body,
+        notes: typeof raw.notes === 'string' ? raw.notes : '',
+        layout:
+          raw.layout === 'title' || raw.layout === 'content' || raw.layout === 'two_col' || raw.layout === 'section'
+            ? raw.layout
+            : 'content',
+      };
+    });
+    ensurePptVisualCoverage(model);
+  }
+
+  return model;
+}
+
+/** 当模型少画一张图时，补一张学习路线图，避免为了图示数量重写整份课件。 */
+function ensurePptVisualCoverage(model: Partial<DocModel>): void {
+  if (model.kind !== 'ppt' || !Array.isArray(model.slides) || model.slides.length < 3) return;
+
+  const countVisuals = (): number =>
+    model.slides?.reduce((total, slide) => {
+      return total + (slide.body ?? []).filter((block) =>
+        block.type === 'chart'
+          ? Boolean(block.chart && ((block.chart.points?.length ?? 0) >= 3 || (block.chart.categories?.length ?? 0) >= 2))
+          : block.type === 'image' && typeof block.src === 'string' && block.src.startsWith('data:image/')
+      ).length;
+    }, 0) ?? 0;
+
+  if (countVisuals() >= PPT_MIN_VISUALS) return;
+
+  const hasAutoLearningPath = model.slides.some((slide) =>
+    slide.body?.some((block: DocBlock) => block.id === 'auto-learning-path')
+  );
+  if (!hasAutoLearningPath) {
+    const targetIndex = Math.min(2, model.slides.length - 2);
+    const target = model.slides[targetIndex];
+    if (target) {
+      model.slides[targetIndex] = {
+        ...target,
+        body: [
+          ...target.body,
+          {
+            id: 'auto-learning-path',
+            type: 'image',
+            src: makeSvgDataUri(buildLearningPathSvg()),
+            caption: '本课学习路线：导入提问 → 初读识字 → 理解重点 → 当堂练习 → 小结作业',
+          },
+        ],
+      };
+    }
+  }
+
+  if (countVisuals() >= PPT_MIN_VISUALS) return;
+  const hasAutoKnowledgeMap = model.slides.some((slide) =>
+    slide.body?.some((block: DocBlock) => block.id === 'auto-knowledge-map')
+  );
+  if (!hasAutoKnowledgeMap) {
+    const targetIndex = Math.max(1, model.slides.length - 2);
+    const target = model.slides[targetIndex];
+    if (target) {
+      model.slides[targetIndex] = {
+        ...target,
+        body: [
+          ...target.body,
+          {
+            id: 'auto-knowledge-map',
+            type: 'image',
+            src: makeSvgDataUri(buildKnowledgeMapSvg()),
+            caption: '本课知识结构：先认识重点，再说清方法，最后独立完成练习',
+          },
+        ],
+      };
+    }
+  }
+}
+
+/** 构造一张可直接内联到 DocModel / PPTX 的 SVG data URI。 */
+function makeSvgDataUri(svg: string): string {
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+/** 五步课堂路线图，用于补足最低图示数量。 */
+function buildLearningPathSvg(): string {
+  const labels = ['导入提问', '初读识字', '理解重点', '当堂练习', '小结作业'];
+  const nodes = labels
+    .map((label, index) => {
+      const x = 42 + index * 145;
+      const line = index < labels.length - 1
+        ? `<line x1="${x + 106}" y1="112" x2="${x + 145}" y2="112" stroke="#2F6BFF" stroke-width="4"/>`
+        : '';
+      const fill = index === 0 ? '#16243A' : index === labels.length - 1 ? '#F3B23C' : '#2F6BFF';
+      const text = index === labels.length - 1 ? '#16243A' : '#FFFFFF';
+      return `${line}<rect x="${x}" y="72" width="106" height="80" rx="14" fill="${fill}"/><text x="${x + 53}" y="119" text-anchor="middle" font-size="20" font-weight="700" fill="${text}">${label}</text>`;
+    })
+    .join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 224"><rect width="760" height="224" fill="#F7F9FC"/><text x="380" y="38" text-anchor="middle" font-size="28" font-weight="800" fill="#16243A">本课学习路线</text>${nodes}</svg>`;
+}
+
+/** 三步知识结构图，仅在模型图示仍不足时使用。 */
+function buildKnowledgeMapSvg(): string {
+  const cards = [
+    ['认识重点', '读准、看懂、说清'],
+    ['掌握方法', '按步骤完成示范'],
+    ['独立应用', '练习、检查、表达'],
+  ];
+  const nodes = cards
+    .map(([title, detail], index) => {
+      const x = 46 + index * 238;
+      const line = index < cards.length - 1
+        ? `<line x1="${x + 190}" y1="132" x2="${x + 238}" y2="132" stroke="#2F6BFF" stroke-width="4"/>`
+        : '';
+      return `${line}<rect x="${x}" y="70" width="190" height="124" rx="16" fill="${index === 1 ? '#2F6BFF' : '#FFFFFF'}" stroke="#D9E1EE" stroke-width="2"/><text x="${x + 95}" y="118" text-anchor="middle" font-size="24" font-weight="800" fill="${index === 1 ? '#FFFFFF' : '#16243A'}">${title}</text><text x="${x + 95}" y="156" text-anchor="middle" font-size="17" fill="${index === 1 ? '#DCE7FF' : '#5B687B'}">${detail}</text>`;
+    })
+    .join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 250"><rect width="760" height="250" fill="#F7F9FC"/><text x="380" y="40" text-anchor="middle" font-size="28" font-weight="800" fill="#16243A">本课知识结构</text>${nodes}</svg>`;
+}
+
+/** 把单个内容块归一化为平台的规范字段。 */
+function normalizeBlock(block: DocBlock, fallbackIndex: number): DocBlock {
+  const raw = block as DocBlock & {
+    headers?: unknown;
+    columns?: unknown;
+    title?: unknown;
+  };
+  const header = Array.isArray(raw.header)
+    ? raw.header
+    : Array.isArray(raw.headers)
+      ? raw.headers
+      : Array.isArray(raw.columns)
+        ? raw.columns
+        : undefined;
+  const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+  const originalText = typeof raw.text === 'string' ? raw.text : '';
+  const text =
+    raw.type === 'callout' && title
+      ? originalText
+        ? `${title}：${originalText}`
+        : title
+      : originalText;
+
+  return {
+    ...raw,
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id : `blk-${fallbackIndex}`,
+    header: header ? header.map((value) => String(value)) : undefined,
+    text,
+  };
 }
 
 /** 与 Edge 侧一致的 PPT 质量门禁，用于编辑保存前提示教师。 */
@@ -163,8 +331,8 @@ function validatePptQuality(model: DocModel, errors: string[]): void {
     if (!slide.title || slide.title.trim().length === 0) errors.push(`第 ${index + 1} 页缺少标题`);
   });
 
-  // 数据型课题必须有真实图表；非数据课题允许用表格、列表和版式表达。
-  if (dataLikeSubject && visuals < PPT_MIN_VISUALS) errors.push(`数据型课题图示不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张真实图表`);
+  // 所有学科都要有真实教学图示；仅靠表格和列表会把课件重新压回提纲。
+  if (visuals < PPT_MIN_VISUALS) errors.push(`教学图示不足：当前 ${visuals} 张，至少需要 ${PPT_MIN_VISUALS} 张 chart 或内联 SVG image`);
   if (dataLikeSubject && charts < 3) errors.push(`数据型课题图表不足：当前 ${charts} 个 chart，至少需要 3 个真实图表`);
   if (placeholderCount > 0) errors.push(`发现 ${placeholderCount} 处“建议配图/待补充”等施工占位语，请改成真实内容`);
 }

@@ -201,7 +201,16 @@ function triggerDownload(blob: Blob, fileName: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const PPT = { width: 13.333, height: 7.5, accent: '2F6BFF', ink: '1B1F27', sub: '64748B' } as const;
+const PPT = {
+  width: 13.333,
+  height: 7.5,
+  accent: '16243A',
+  brand: '2F6BFF',
+  gold: 'F3B23C',
+  ink: '1B1F27',
+  sub: '64748B',
+  soft: 'F7F9FC',
+} as const;
 
 /** 把 data URI 转成 pptxgenjs 可稳定识别的 base64 data。 */
 function toPptxDataUri(src: string): string | null {
@@ -310,39 +319,176 @@ function blockToSlideText(block: DocBlock): string {
   return block.text ?? '';
 }
 
-/** 根据 slide.layout 组织文字和视觉块，避免所有页面退化成同一套项目符号。 */
+/** 把 table 块写成 PowerPoint 原生表格，保留真实行列结构。 */
+function addTableToSlide(
+  slide: any,
+  block: DocBlock,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  const header = block.header ?? [];
+  const rows = block.rows ?? [];
+  if (header.length === 0 && rows.length === 0) return false;
+
+  const body = header.length > 0 ? [header, ...rows] : rows;
+  slide.addTable(
+    body.map((row, rowIndex) =>
+      row.map((cell) => ({
+        text: String(cell ?? ''),
+        options: {
+          bold: header.length > 0 && rowIndex === 0,
+          color: header.length > 0 && rowIndex === 0 ? '1D3765' : PPT.ink,
+          fill:
+            header.length > 0 && rowIndex === 0
+              ? 'E9F0FF'
+              : rowIndex % 2 === 0
+                ? 'FFFFFF'
+                : 'F8FAFD',
+          margin: 0.06,
+          fontFace: 'Microsoft YaHei',
+          fontSize: body.length > 5 ? 12 : 14,
+        },
+      })),
+    ),
+    {
+      x,
+      y,
+      w,
+      h,
+      border: { color: 'D6DFEC', pt: 0.8 },
+      autoPage: false,
+      valign: 'mid',
+    },
+  );
+  return true;
+}
+
+/** 在指定区域渲染一组文本、表格和提示块。 */
+function addBlocksToRect(
+  slide: any,
+  blocks: readonly DocBlock[],
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  const tableBlocks = blocks.filter((block) => block.type === 'table');
+  const otherBlocks = blocks.filter((block) => block.type !== 'table' && block.type !== 'chart' && block.type !== 'image');
+  const textValue = otherBlocks.map(blockToSlideText).filter(Boolean).join('\n\n');
+
+  if (tableBlocks.length === 1 && otherBlocks.length === 0) {
+    return addTableToSlide(slide, tableBlocks[0], x, y, w, h);
+  }
+
+  if (textValue) {
+    slide.addText(textValue, {
+      x,
+      y,
+      w,
+      h,
+      fontFace: 'Microsoft YaHei',
+      fontSize: textValue.length > 300 ? 14 : textValue.length > 180 ? 16 : 18,
+      color: PPT.ink,
+      breakLine: false,
+      fit: 'shrink',
+      valign: 'top',
+      margin: 0.04,
+      paraSpaceAfterPt: 10,
+      breakLineOnOverflow: true,
+    });
+    return true;
+  }
+
+  if (tableBlocks.length > 0) {
+    return addTableToSlide(slide, tableBlocks[0], x, y, w, h);
+  }
+  return false;
+}
+
+/**
+ * 根据 slide.layout 组织文字和视觉块。
+ *
+ * 目标不是把内容“塞进 PPT”，而是让导出的每一页仍然像课堂投屏：
+ * 图文页左文右图，双栏页保留对照关系，表格页使用原生表格，活动与练习页保持大字号。
+ */
 function addSlideBody(slide: any, body: readonly DocBlock[], layout: Slide['layout']): void {
   const visuals = body.filter((b) => b.type === 'chart' || (b.type === 'image' && Boolean(b.src)));
   const text = body.filter((b) => b.type !== 'chart' && b.type !== 'image');
+  const hasTable = text.some((block) => block.type === 'table');
   const textValue = text.map(blockToSlideText).filter(Boolean).join('\n\n');
 
-  if (layout === 'two_col') {
+  if (layout === 'two_col' || (visuals.length === 0 && hasTable && text.length > 1)) {
     const midpoint = Math.ceil(body.length / 2);
-    const left = body.slice(0, midpoint).map(blockToSlideText).filter(Boolean).join('\n\n');
-    const right = body.slice(midpoint).map(blockToSlideText).filter(Boolean).join('\n\n');
-    for (const [value, x] of [[left, 0.65], [right, 6.85]] as const) {
-      if (!value) continue;
-      slide.addShape('roundRect', { x, y: 1.35, w: 5.8, h: 5.35, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'E2E8F0', pt: 1 } });
-      slide.addText(value, { x: x + 0.25, y: 1.6, w: 5.3, h: 4.85, fontSize: 16, color: PPT.ink, breakLine: false, fit: 'shrink', valign: 'top', margin: 0.04, paraSpaceAfterPt: 9 });
-    }
+    const left = body.slice(0, midpoint);
+    const right = body.slice(midpoint);
+    slide.addShape('line', {
+      x: 6.65,
+      y: 1.55,
+      w: 0,
+      h: 4.75,
+      line: { color: 'DCE4F0', pt: 1 },
+    });
+    addBlocksToRect(slide, left, 0.72, 1.48, 5.6, 4.95);
+    addBlocksToRect(slide, right, 7.02, 1.48, 5.55, 4.95);
     return;
   }
 
   if (visuals.length > 0) {
-    if (textValue) {
-      slide.addShape('roundRect', { x: 0.65, y: 1.35, w: 5.55, h: 5.35, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'E2E8F0', pt: 1 } });
-      slide.addText(textValue, { x: 0.95, y: 1.65, w: 4.95, h: 4.75, fontSize: 16, color: PPT.ink, fit: 'shrink', valign: 'top', margin: 0.04, paraSpaceAfterPt: 9 });
-    }
     const visual = visuals[0];
-    const ok = visual.type === 'chart'
-      ? addChartToSlide(slide, visual, 6.45, 1.45, 6.25, 4.95)
-      : addImageToSlide(slide, visual, 6.45, 1.45, 6.25, 4.95);
-    if (!ok && !textValue) slide.addText(blockToSlideText(visual), { x: 0.8, y: 1.5, w: 11.8, h: 4.5, fontSize: 18, color: PPT.ink, fit: 'shrink' });
+    const textWidth = text.length > 0 ? 5.15 : 0;
+    if (textValue) {
+      addBlocksToRect(slide, text, 0.72, 1.5, textWidth, 4.95);
+    }
+    const visualX = textValue ? 6.25 : 1.2;
+    const visualW = textValue ? 6.35 : 10.9;
+    const ok =
+      visual.type === 'chart'
+        ? addChartToSlide(slide, visual, visualX, 1.45, visualW, 4.95)
+        : addImageToSlide(slide, visual, visualX, 1.42, visualW, 5.0);
+    if (!ok && !textValue) {
+      slide.addText(blockToSlideText(visual), {
+        x: 0.9,
+        y: 1.6,
+        w: 11.5,
+        h: 4.5,
+        fontFace: 'Microsoft YaHei',
+        fontSize: 18,
+        color: PPT.ink,
+        fit: 'shrink',
+      });
+    }
     return;
   }
 
-  slide.addShape('roundRect', { x: 0.65, y: 1.35, w: 12.05, h: 5.35, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'E2E8F0', pt: 1 } });
-  slide.addText(textValue || '本页暂无正文内容', { x: 0.95, y: 1.7, w: 11.45, h: 4.7, fontSize: 18, color: textValue ? PPT.ink : '94A3B8', italic: !textValue, fit: 'shrink', valign: 'top', margin: 0.04, paraSpaceAfterPt: 10 });
+  if (hasTable) {
+    addBlocksToRect(slide, text, 0.72, 1.48, 11.9, 4.95);
+    return;
+  }
+
+  slide.addShape('rect', {
+    x: 0.72,
+    y: 1.45,
+    w: 0.055,
+    h: 4.95,
+    fill: { color: PPT.gold },
+    line: { color: PPT.gold },
+  });
+  slide.addText(textValue || '本页暂无正文内容', {
+    x: 1.05,
+    y: 1.55,
+    w: 11.5,
+    h: 4.75,
+    fontFace: 'Microsoft YaHei',
+    fontSize: textValue.length > 300 ? 15 : textValue.length > 180 ? 17 : 19,
+    color: textValue ? PPT.ink : '94A3B8',
+    italic: !textValue,
+    fit: 'shrink',
+    valign: 'top',
+    margin: 0.04,
+    paraSpaceAfterPt: 11,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +509,7 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
-  pptx.theme = { headFontFace: 'Aptos Display', bodyFontFace: 'Aptos' };
+  pptx.theme = { headFontFace: 'Microsoft YaHei', bodyFontFace: 'Microsoft YaHei' };
   pptx.author = '师创';
   pptx.company = '师创';
   pptx.title = model.meta?.title ?? '师创文档';
@@ -397,41 +543,89 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
     const slide = pptx.addSlide();
     const isCover = s.layout === 'title' || s.index === 0;
     const isSection = s.layout === 'section';
-    slide.background = { color: isCover ? PPT.accent : 'F7F9FC' };
+    slide.background = { color: isCover ? PPT.accent : isSection ? 'EDF3FF' : PPT.soft };
 
     if (!isCover) {
-      slide.addShape('rect', { x: 0, y: 0, w: PPT.width, h: 0.16, fill: { color: PPT.accent }, line: { color: PPT.accent } });
-      slide.addShape('rect', { x: 0, y: 0.16, w: PPT.width, h: 0.04, fill: { color: 'BFD1FF' }, line: { color: 'BFD1FF' } });
+      slide.addShape('rect', { x: 0, y: 0, w: PPT.width, h: 0.12, fill: { color: PPT.brand }, line: { color: PPT.brand } });
+      slide.addShape('rect', { x: 0.72, y: 0.12, w: 0.8, h: 0.055, fill: { color: PPT.gold }, line: { color: PPT.gold } });
     }
 
     slide.addText(s.title || '（无标题）', {
-      x: isCover ? 0.9 : 0.65,
-      y: isCover ? 2.25 : 0.42,
-      w: isCover ? 11.55 : 11.8,
-      h: isCover ? 1.2 : 0.62,
-      fontSize: isCover ? 32 : 25,
+      x: isCover ? 0.95 : 0.72,
+      y: isCover ? 2.15 : 0.38,
+      w: isCover ? 11.15 : 11.55,
+      h: isCover ? 1.5 : 0.72,
+      fontFace: 'Microsoft YaHei',
+      fontSize: isCover ? 36 : isSection ? 34 : 28,
       bold: true,
       color: isCover ? 'FFFFFF' : PPT.ink,
-      align: isCover ? 'center' : 'left',
+      align: 'left',
       valign: 'middle',
       fit: 'shrink',
       margin: 0,
     });
 
     if (isCover) {
+      slide.addShape('rect', {
+        x: 0.95,
+        y: 1.78,
+        w: 0.85,
+        h: 0.08,
+        fill: { color: PPT.gold },
+        line: { color: PPT.gold },
+      });
       const subtitle = [model.meta?.subject, model.meta?.grade, model.meta?.textbook, model.meta?.duration]
         .filter(Boolean)
         .join('  ·  ');
-      if (subtitle) slide.addText(subtitle, { x: 1.2, y: 3.75, w: 10.9, h: 0.4, fontSize: 16, color: 'E6EEFF', align: 'center', margin: 0 });
-      slide.addShape('line', { x: 5.1, y: 4.45, w: 3.1, h: 0, line: { color: 'BFD1FF', pt: 1.5 } });
-      slide.addText('师创 · 请教师核对后使用', { x: 1.2, y: 6.2, w: 10.9, h: 0.3, fontSize: 11, color: 'DCE7FF', align: 'center', margin: 0 });
+      if (subtitle) {
+        slide.addText(subtitle, {
+          x: 0.95,
+          y: 3.72,
+          w: 10.9,
+          h: 0.4,
+          fontFace: 'Microsoft YaHei',
+          fontSize: 16,
+          color: 'DCE7FF',
+          align: 'left',
+          margin: 0,
+        });
+      }
+      slide.addText('师创 · 请教师核对后使用', {
+        x: 0.95,
+        y: 6.55,
+        w: 10.9,
+        h: 0.3,
+        fontFace: 'Microsoft YaHei',
+        fontSize: 11,
+        color: 'BFCEE5',
+        align: 'left',
+        margin: 0,
+      });
     } else if (isSection) {
-      slide.addShape('roundRect', { x: 1.1, y: 2.05, w: 11.1, h: 2.7, rectRadius: 0.12, fill: { color: 'EAF0FF' }, line: { color: 'BFD1FF', pt: 1 } });
       addSlideBody(slide, s.body, 'two_col');
     } else {
       addSlideBody(slide, s.body, s.layout ?? 'content');
-      slide.addText(`师创  ·  ${s.index + 1}`, { x: 11.3, y: 7.12, w: 1.35, h: 0.2, fontSize: 9, color: PPT.sub, align: 'right', margin: 0 });
-      slide.addText('请教师核对', { x: 0.65, y: 7.12, w: 1.5, h: 0.2, fontSize: 9, color: PPT.sub, margin: 0 });
+      slide.addText(`${s.index + 1} / ${baseSlides.length}`, {
+        x: 11.55,
+        y: 7.05,
+        w: 1.05,
+        h: 0.22,
+        fontFace: 'Microsoft YaHei',
+        fontSize: 9,
+        color: PPT.sub,
+        align: 'right',
+        margin: 0,
+      });
+      slide.addText('师创课堂课件', {
+        x: 0.72,
+        y: 7.05,
+        w: 2.0,
+        h: 0.22,
+        fontFace: 'Microsoft YaHei',
+        fontSize: 9,
+        color: PPT.sub,
+        margin: 0,
+      });
     }
 
     if (s.notes) slide.addNotes(s.notes);

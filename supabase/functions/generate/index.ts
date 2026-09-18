@@ -52,11 +52,11 @@ const DOC_STREAM_MAX_TIMEOUT_MS = 130_000;
 /**
  * PPT 首次生成的输出上限。
  *
- * 0046 提示词要求 15~18 页、逐页配图，模型很容易在 16k token 处写满，
- * 再叠加硅基流动的生成速度后，130 秒内仍可能写不完。首次先固定 12 页和
- * 10k token 的“可交付紧凑版”，把可靠产出放在第一位；教师进编辑器后仍可继续补充。
+ * 0053 要求 18 页完整课堂流程，并在关键页生成真实 chart / 内联教学图。
+ * 输出预算提高到 12k token；如果模型截断，会走
+ * 紧凑修复而不是把半份 JSON 当成成功产物交付。
  */
-const PPT_OUTPUT_TOKEN_CAP = 10_000;
+const PPT_OUTPUT_TOKEN_CAP = 12_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
 /**
@@ -168,6 +168,29 @@ function modelErrorMessage(provider: string, status: number): string {
   if (status === 429) return `模型服务繁忙（${source}），请稍后重试`;
   if (status >= 400 && status < 500) return `模型请求参数错误（${source}，HTTP ${status}）`;
   return `AI 服务暂时异常（${source}，HTTP ${status}），本次不扣积分`;
+}
+
+/**
+ * 解析实际调用时使用的模型 ID。
+ *
+ * 首选供应商未配置密钥时，`chooseAdapter` 会回落到其他 provider；此时不能再沿用
+ * 首选供应商的 modelId，否则会把 DeepSeek 的模型名发给 SiliconFlow，直接触发 HTTP 400。
+ */
+function resolveRuntimeModelId(
+  actualProvider: string,
+  preferredProvider: string | undefined,
+  preferredModelId: string | undefined,
+): string {
+  if (actualProvider === preferredProvider && preferredModelId) return preferredModelId;
+  const fallbackIds: Record<string, string> = {
+    deepseek: 'deepseek-chat',
+    siliconflow: 'deepseek-ai/DeepSeek-V4-Flash',
+    qwen: 'qwen-plus',
+    glm: 'glm-4-flash',
+    doubao: 'doubao-pro-32k',
+    mock: 'mock',
+  };
+  return fallbackIds[actualProvider] ?? preferredModelId ?? 'deepseek-chat';
 }
 
 /** 任务行尚未写入时的兜底退款（例如幂等键冲突）。 */
@@ -603,7 +626,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 adapter,
                 llmReq,
                 {
-                  modelId: modelCfg?.modelId ?? 'deepseek-chat',
+                  modelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
                   apiBase: selectedApiBase,
                   maxOutputTokens: docMaxOutput,
                 },
@@ -617,6 +640,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
             // ---- 6. 校验 + 重试 1 次 ----
             let result = validateDoc(raw, MAX_DOC_BYTES);
+            if (!result.ok) {
+              console.warn(
+                `[generate:doc] 首次校验失败 docType=${f} chars=${raw.length} finish=${finishReason || 'none'} errors=${result.errors.slice(0, 8).join(' | ').slice(0, 800)}`,
+              );
+            }
             if (!result.ok && !isMockFlag) {
               send('stage', { stage: 'verify', label: '自检与优化', status: 'running' });
               const truncated =
@@ -633,7 +661,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                   temperature: f === 'ppt' ? 0.25 : llmReq.temperature,
                 },
                 {
-                  modelId: modelCfg?.modelId ?? 'deepseek-chat',
+                  modelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
                   apiBase: selectedApiBase,
                   maxOutputTokens: Math.min(docMaxOutput, 8_000),
                   totalTimeoutMs: 70_000,
@@ -644,6 +672,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
               finishReason = repaired.finishReason;
               if (repaired.usage) usage = repaired.usage;
               result = validateDoc(raw, MAX_DOC_BYTES);
+              if (!result.ok) {
+                console.warn(
+                  `[generate:doc] 修复后仍失败 docType=${f} chars=${raw.length} finish=${finishReason || 'none'} errors=${result.errors.slice(0, 8).join(' | ').slice(0, 800)}`,
+                );
+              }
             }
 
             if (!result.ok || !result.model) {
@@ -973,7 +1006,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           usage = normalizeUsage(null, html, composed.systemPrompt + composed.userPrompt);
         } else {
           const ctx = {
-            modelId: modelCfg?.modelId ?? 'deepseek-chat',
+            modelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
             apiBase: selectedApiBase,
             maxOutputTokens: maxOutput,
             stream: true,
@@ -1056,7 +1089,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             ...llmReq,
             userPrompt: repairPrompt,
           }, {
-            modelId: modelCfg?.modelId ?? 'deepseek-chat',
+            modelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
             apiBase: selectedApiBase,
             maxOutputTokens: maxOutput,
             stream: false,
@@ -1408,12 +1441,14 @@ function withDocOutputBudget(userPrompt: string, docType: string): string {
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 本次输出预算（最高优先级，覆盖前文的扩展性建议）\n' +
-    '请在 10000 tokens 内完成完整 JSON，必须一口气闭合，不能截断：\n' +
-    '1. 固定输出 12 页：封面、学习目标、情境导入、4 个知识讲解页、2 个例题/活动页、易错提醒、课堂小结、作业布置；\n' +
-    '2. 每页保留 2~3 个正文块，每页 notes 控制在 30~60 字，直接写教师可照读的话；\n' +
-    '3. 数学、物理、化学、生物、地理等数据型课题，只在最能说明知识点的 3 页使用真实 chart；语文、历史等非数据课题优先用 table 或 list，不要为了凑图编造无意义数据；全份都不要生成 image；\n' +
-    '4. 至少 1 个 table；其余无图页用 list 或 table 结构化表达，内容要能直接上课，避免空泛和重复；\n' +
-    '5. 只输出一个完整 JSON 对象，不要解释过程，不要输出备选方案。'
+    '请在 12000 tokens 内完成完整 JSON，必须一口气闭合，不能截断：\n' +
+    '1. 固定输出 18 页：封面、学习目标、情境导入、初读任务、字词理解、2 个知识讲解、例题示范、跟做活动、易错提醒、基础练习、提高练习、迁移应用、课堂讨论、方法归纳、课堂小结、分层作业，最后 1 页写教师核对与课上机动提示；\n' +
+    '2. 每页保留 2~4 个正文块，每页 notes 控制在 45~100 字，写教师可直接照读的话，并包含一个追问或学生易错点；\n' +
+    '3. 数学、物理、化学、生物、地理等数据型课题至少 3 个真实 chart、整份至少 4 个图示；语文、历史等文科至少 4 个有信息量的内联 SVG image（时间轴、结构图、对比图、朗读节奏图等），不要用纯装饰图凑数；\n' +
+    '4. 至少 1 个 table、2 个 callout；讲解页、例题页、活动页、练习页要有真实内容，不能只写标题或方法口号；\n' +
+    '5. 图示中的可见文字必须使用中文，禁止 Water Cycle、Evaporation 等英文标签；\n' +
+    '6. 表格表头字段统一写 `header`，禁止写成 `headers` 或 `columns`；callout 只用 `text`，不要自造 `title` 字段；\n' +
+    '7. 只输出一个完整 JSON 对象，不要解释过程，不要输出备选方案。'
   );
 }
 
