@@ -184,7 +184,7 @@ function resolveRuntimeModelId(
   if (actualProvider === preferredProvider && preferredModelId) return preferredModelId;
   const fallbackIds: Record<string, string> = {
     deepseek: 'deepseek-chat',
-    siliconflow: 'deepseek-ai/DeepSeek-V3.2',
+    siliconflow: 'Qwen/Qwen3-30B-A3B-Instruct-2507',
     qwen: 'qwen-plus',
     glm: 'glm-4-flash',
     doubao: 'doubao-pro-32k',

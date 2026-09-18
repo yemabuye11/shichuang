@@ -9,13 +9,14 @@
 --
 -- 修正：
 --   1. PPT 直接覆盖到已存在的 siliconflow-deepseek 配置行；
---   2. 该行模型改为 SiliconFlow 实际支持的 deepseek-ai/DeepSeek-V3.2；
+--   2. 该行模型改为 SiliconFlow 实际支持、长 JSON 吞吐更稳定的
+--      Qwen/Qwen3-30B-A3B-Instruct-2507；
 --   3. 不修改其他文档类型的模型路由。
 -- =============================================================================
 
 update public.model_profiles
-   set model_id = 'deepseek-ai/DeepSeek-V3.2',
-       display_name = '硅基流动·DeepSeek V3.2',
+   set model_id = 'Qwen/Qwen3-30B-A3B-Instruct-2507',
+       display_name = '硅基流动·Qwen3 30B 快速版',
        api_base = '',
        enabled = true
  where id = 'siliconflow-deepseek';
