@@ -63,7 +63,7 @@ const PPT_OUTPUT_TOKEN_CAP = 12_000;
 const PPT_RESUME_TOTAL_PARTS = 4;
 const PPT_RESUME_PART_MAX_OUTPUT = 3_500;
 const PPT_RESUME_PART_TIMEOUT_MS = 115_000;
-const PPT_CHECKPOINT_BUCKET = 'textbooks';
+const PPT_CHECKPOINT_BUCKET = 'apps-html';
 const PPT_CHECKPOINT_PREFIX = 'ppt-resume';
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
@@ -692,7 +692,9 @@ function createPptResumableResponse(
             jobId,
             promptVersion: composed.promptVersion,
             systemPrompt: composed.systemPrompt,
-            userPrompt: withDocOutputBudget(composed.userPrompt, 'ppt'),
+            // 可续跑链路把 18 页预算写入每一段自己的提示词，避免这里再重复
+            // “固定输出 18 页”而让模型在单段请求里继续生成整份课件。
+            userPrompt: composed.userPrompt,
             modelKey: modelCfg?.id ?? '',
             runtimeModelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
             provider,
@@ -949,9 +951,10 @@ function createPptResumableResponse(
         );
         const partValidation = validatePptPart(partResult.content, part, MAX_DOC_BYTES);
         if (!partValidation.ok || !partValidation.model) {
+          const detail = partValidation.errors.slice(0, 3).join('；');
           throw new AppError(
             'VALIDATE_FAILED',
-            `第 ${part} 段内容不完整，系统会自动重新生成这一段`,
+            `第 ${part} 段内容不完整，系统会自动重新生成这一段${detail ? `（${detail}）` : ''}`,
             { retryable: true, refundable: false },
           );
         }

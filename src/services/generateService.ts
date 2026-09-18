@@ -418,7 +418,9 @@ async function runRemotePptResumable(
           await abortRemotePpt(sb, req.idempotencyKey);
           emitError(handlers, {
             code: outcome.error?.code ?? 'NETWORK',
-            message: 'PPT 分段多次未完成，已自动停止并退还积分，请重新生成',
+            message: outcome.error?.message
+              ? `${outcome.error.message}。已自动停止并退还积分，请重试`
+              : 'PPT 分段多次未完成，已自动停止并退还积分，请重新生成',
             refunded: true,
             creditsBalance: outcome.error?.creditsBalance ?? 0,
             retryable: true,
