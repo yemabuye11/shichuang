@@ -11,7 +11,9 @@
   - 文档预览页增加“导出 / 分享”入口；在线编辑页原有 PPTX、Word 导出能力保持不变。
   - `serve-app` 对文档优先读取影子副本，并对主存储故障做安全降级，不再返回无说明的 500。
   - GitHub Actions 增加 `serve-app` 自动部署，避免后续只发布 `generate` 而漏掉回源函数。
-  - 线上真实生成回归后，继续修复两个收尾问题：文档任务先结算再发送 `done`，避免连接关闭后任务被误标为 `TIMEOUT`；重新打开文档时版本角标以数据库 `doc_version` 为准，避免保存 v2 后仍显示 v1。
+  - 线上真实生成回归后，继续修复文档闭环：AI 修复改为流式调用并限制为 70 秒、8000 tokens；文档任务先完成 `settle_generation` 结算再发送 `done`，避免连接关闭后成功任务被误标为 `TIMEOUT`；重新打开文档时版本角标以数据库 `doc_version` 为准，避免保存 v2 后仍显示 v1。
+  - PPT 校验按学科调整：数学、物理、化学、生物、地理等数据型课题仍需 3 个真实图表；语文、历史等非数据课题允许用 table/list 表达，不再强迫模型编造没有依据的数据。前端与 Edge 使用同一判定，避免修复重试被无效图表要求拖到超时。
+  - `settle_generation` 返回错误时不再静默继续，`generate` 会明确抛出结算失败，避免前端显示成功但后台任务/积分状态不完整。
 - 修改的文件：
   - `.github/workflows/deploy.yml`
   - `src/components/square/AppCard.tsx`
@@ -26,15 +28,17 @@
   - `node scripts/check-functions.mjs`：45/45 通过。
   - `npm run build`：通过，仅有既有的大 chunk 警告。
   - `git diff --check`：通过。
-  - Git 提交并推送：`78973bf fix: stabilize ppt generation and document routing`。
-  - GitHub Actions `35325668841`：前端、`generate`、`serve-app` 均部署成功。
+  - Git 提交并推送：`78973bf fix: stabilize ppt generation and document routing`、`1c7359b fix: stream and bound document repair retries`、`7b67b0d fix: settle document generations before completion`、`8762e86 fix: tune PPT validation by subject`。
+  - GitHub Actions `35325668841`：前端、`generate`、`serve-app` 部署成功；后续提交 `8762e86` 已推送。
   - 线上失败草稿的回源接口已由 500 改为可读的 404 降级响应。
   - 线上真实 PPT 生成：九年级数学《二次函数的图像与性质》第1课时，约 87 秒内完成，正常进入 `/d/6dd59026-c349-4cc5-9eb9-c1d3977145ea`。
   - 产物结构：共 12 页，含学习目标、概念讲解、2 道例题、易错提醒、课堂小结和分层作业；第 5、6、8 页图表已实际渲染，每页均有讲者备注。
-  - 在线编辑：修改首页标题并保存为 v2 成功。
-  - PPTX 导出：出现“PPTX 已生成，开始下载”成功提示。
-  - 积分流水核对：首次线上成功产物仍出现预扣后 `TIMEOUT` 退还记录，结合代码确认是“先发 done、后结算”的连接关闭竞态，已调整结算顺序。
+  - 第二轮线上真实 PPT 生成：语文课题约 47 秒完成，正常进入 `/d/e3f85b11-0a00-4a54-b842-f7302948262d`；共 12 页，含讲解、练习、易错字、作业和讲者备注，未强迫生成无依据图表。
+  - 数据库核对：数学任务 `94f36958-e85e-49bc-a139-533415491049` 与语文任务 `2c3051e1-849e-4529-966b-bcb7201790fb` 均为 `status=succeeded`；语文任务 token 为 in 6278 / out 3964。
+  - 两轮均完成在线编辑并保存为 v2，重新打开文档后版本角标仍显示 v2；PPTX 导出均出现“PPTX 已生成，开始下载”成功提示。
+  - 积分流水核对：成功记录旁的 `+8 TIMEOUT` 属于此前失败任务退款，不是成功任务被错误退款；新成功任务按成功状态正常结算。
+  - 本地 `HEAD` 的 `b4c5cfe fix: surface document settlement failures` 在 GitHub HTTPS 不可达时，已通过 Supabase CLI 直接部署到 `mmhoztwicjrxkcjfwrjk` 的 `generate` 函数。
 - 遗留问题：
-  - 本轮代码推送和线上部署完成后，还需复查 v2 角标及下一笔积分流水是否正常写成成功结算。
+  - `b4c5cfe` 已部署到线上，但尚未推送到 GitHub；当前网络无法访问 `github.com:443`，恢复网络后需要补推。
 - 下一步：
-  - 运维 / QA：部署本轮修复，复查同一文档 v2 角标和下一笔生成任务的结算状态。
+  - 运维：网络恢复后执行 `git push origin main`，确认 GitHub 与线上 Supabase 版本重新对齐。
