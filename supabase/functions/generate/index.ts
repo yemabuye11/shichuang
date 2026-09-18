@@ -32,7 +32,12 @@ import type { LlmRequest, TokenUsage } from '../_shared/llm/types.ts';
 import { normalizeUsage } from '../_shared/llm/pricing.ts';
 import { getStore, shadowStore } from '../_shared/store/index.ts';
 import { extractTitle, validateHtml } from '../_shared/validateHtml.ts';
-import { validateDoc, buildDocRepairPrompt, MAX_DOC_BYTES } from '../_shared/doc/validate.ts';
+import {
+  validateDoc,
+  buildDocRepairPrompt,
+  buildDocCompactRepairPrompt,
+  MAX_DOC_BYTES,
+} from '../_shared/doc/validate.ts';
 import { renderDoc } from '../_shared/doc/render.ts';
 import { isDocType, type DocModel } from '../_shared/doc/types.ts';
 import { assertUnderMonthlyCap, checkTokenLimit, costOf, currentPeriod } from '../_shared/cost.ts';
@@ -40,13 +45,17 @@ import { getSearchAdapter } from '../_shared/search/index.ts';
 
 /** 单次生成超时（毫秒）。 */
 const MODEL_TIMEOUT_MS = 90_000;
+/** 文档流等待首包 / 下一个增量的最大空闲时间。 */
+const DOC_STREAM_IDLE_TIMEOUT_MS = 60_000;
+/** 文档流从发起到收尾的总上限，给 16k 长 JSON 留出余量，同时为退款收尾预留时间。 */
+const DOC_STREAM_MAX_TIMEOUT_MS = 130_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
 /**
  * 超过模型超时并留出少量收尾时间仍为 running 的任务视为孤儿任务。
  * 不能使用过长阈值，否则旧请求会在数据库里长期占住单用户并发锁。
  */
-const STALE_JOB_TIMEOUT_MS = MODEL_TIMEOUT_MS + 15_000;
+const STALE_JOB_TIMEOUT_MS = DOC_STREAM_MAX_TIMEOUT_MS + 15_000;
 
 /** 文档模型流没有可靠 finish 帧时，用完整 JSON 作为收尾信号。 */
 function isCompleteJsonObject(text: string): boolean {
@@ -544,7 +553,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
               .update({ prompt_version: composed.promptVersion })
               .eq('id', jobId);
 
-            // ---- 5. 调模型（文档类使用一次性 JSON，避免长流无 finish 卡在 70%）----
+            // ---- 5. 调模型（文档类流式收集完整 JSON）----
             const llmReq: LlmRequest = {
               systemPrompt: composed.systemPrompt,
               userPrompt: composed.userPrompt,
@@ -554,6 +563,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
             const startedAt = Date.now();
             let raw = '';
+            let finishReason = '';
             let usage: TokenUsage = {
               promptTokens: 0,
               completionTokens: 0,
@@ -570,29 +580,34 @@ Deno.serve(async (req: Request): Promise<Response> => {
               }
               usage = normalizeUsage(null, docJson, composed.systemPrompt + composed.userPrompt);
             } else {
-              // 文档结果是一个需要完整解析、校验和落库的 JSON。流式响应在部分
-              // 网关上可能已经返回完整内容却迟迟不发送 finish，导致页面永久停在
-              // “生成文档内容”。一次性请求把 fetch、headers 和 json() 放进同一
-              // 个 AbortController 超时范围；拿到完整结果后只发一次 delta。
-              raw = await callOnce(
+              // 文档必须流式收集：首个 token 就反馈到页面，避免非流式请求在
+              // 模型写长 JSON 时一直显示 0 B；同时以空闲超时和总超时双重兜底。
+              const called = await callDocStreaming(
                 adapter,
                 { ...llmReq, userPrompt: composed.userPrompt },
                 {
                   modelId: modelCfg?.modelId ?? 'deepseek-chat',
                   apiBase: selectedApiBase,
                   maxOutputTokens: maxOutput,
-                  stream: false,
                 },
+                (text) => send('delta', { text }),
               );
-              if (raw.trim().length > 0) send('delta', { text: raw });
-              usage = normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
+              raw = called.content;
+              finishReason = called.finishReason;
+              usage = called.usage ??
+                normalizeUsage(null, raw, composed.systemPrompt + composed.userPrompt);
             }
 
             // ---- 6. 校验 + 重试 1 次 ----
             let result = validateDoc(raw, MAX_DOC_BYTES);
             if (!result.ok && !isMockFlag) {
-              const repairPrompt = buildDocRepairPrompt(composed.userPrompt, result.errors);
-              raw = await callOnce(adapter, {
+              const truncated =
+                finishReason === 'length' ||
+                isProbablyTruncatedDoc(raw);
+              const repairPrompt = truncated
+                ? buildDocCompactRepairPrompt(composed.userPrompt, result.errors)
+                : buildDocRepairPrompt(composed.userPrompt, result.errors);
+              const repaired = await callOnce(adapter, {
                 ...llmReq,
                 userPrompt: repairPrompt,
               }, {
@@ -601,11 +616,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 maxOutputTokens: maxOutput,
                 stream: false,
               });
+              raw = repaired.content;
+              finishReason = repaired.finishReason;
+              if (repaired.usage) usage = repaired.usage;
               result = validateDoc(raw, MAX_DOC_BYTES);
             }
 
             if (!result.ok || !result.model) {
               send('stage', { stage: 'verify', label: '自检与优化', status: 'failed' });
+              if (finishReason === 'length' || isProbablyTruncatedDoc(raw)) {
+                throw new AppError(
+                  'TOKEN_LIMIT',
+                  '这次内容超过模型单次输出上限，已退还积分。请减少页数，或拆成两份分别生成',
+                );
+              }
               throw new AppError('VALIDATE_FAILED', '这次没生成成功，已退还积分，点重试或换个说法');
             }
 
@@ -971,7 +995,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         let result = validateHtml(raw, maxHtmlBytes);
         if (!result.ok && !isMock(adapter)) {
           const repairPrompt = await composeRepair(composed.userPrompt, result.errors);
-          raw = await callOnce(adapter, {
+          raw = (await callOnce(adapter, {
             ...llmReq,
             userPrompt: repairPrompt,
           }, {
@@ -979,7 +1003,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             apiBase: selectedApiBase,
             maxOutputTokens: maxOutput,
             stream: false,
-          });
+          })).content;
           result = validateHtml(raw, maxHtmlBytes);
         }
 
@@ -1272,6 +1296,164 @@ async function recordSearchSpend(sb: ReturnType<typeof adminClient>, provider: s
 }
 
 /**
+ * 单次模型调用结果。
+ */
+interface ModelCallResult {
+  content: string;
+  /** OpenAI 兼容协议的结束原因；`length` 表示被 max_tokens 截断。 */
+  finishReason: string;
+  usage?: TokenUsage;
+}
+
+/** 判断异常是否来自 AbortController。 */
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException
+    ? err.name === 'AbortError'
+    : err instanceof Error && err.name === 'AbortError';
+}
+
+/**
+ * 粗略识别 DocModel 是否在 token 上限处被截断。
+ *
+ * 只对“JSON 没有闭合 / 解析器明确报 unexpected end”判真，避免把普通格式错误
+ * 误当成截断而走紧凑修复。
+ */
+function isProbablyTruncatedDoc(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  const candidate = trimmed
+    .replace(/^```(?:json|JSON)?\s*/i, '')
+    .replace(/```\s*$/, '')
+    .trim();
+  if (!candidate) return false;
+  if (!candidate.endsWith('}') && !candidate.endsWith(']')) return true;
+  try {
+    JSON.parse(candidate);
+    return false;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return /unexpected end|end of json|unterminated/i.test(message);
+  }
+}
+
+/**
+ * 流式收集文档 JSON。
+ *
+ * 与非流式请求相比，模型每吐出一个增量就立即转发到前端，教师不会再长时间看到
+ * 0 B；同时用“空闲超时 + 总超时”兜底，避免个别网关保持连接但不继续产出。
+ * 一旦识别到完整 JSON 或 finish_reason，主动取消上游读取，避免继续占着连接。
+ */
+async function callDocStreaming(
+  adapter: ReturnType<typeof chooseAdapter>['adapter'],
+  req: LlmRequest,
+  ctx: { modelId: string; apiBase: string; maxOutputTokens: number },
+  sendDelta: (text: string) => void,
+): Promise<ModelCallResult> {
+  const built = adapter.buildRequest(req, { ...ctx, stream: true });
+  const ac = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let totalTimer: ReturnType<typeof setTimeout> | undefined;
+  let timeoutKind: '' | 'idle' | 'total' = '';
+
+  const abortForTimeout = (kind: 'idle' | 'total'): void => {
+    if (ac.signal.aborted) return;
+    timeoutKind = kind;
+    ac.abort();
+  };
+  const armIdleTimeout = (): void => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => abortForTimeout('idle'), DOC_STREAM_IDLE_TIMEOUT_MS);
+  };
+
+  totalTimer = setTimeout(() => abortForTimeout('total'), DOC_STREAM_MAX_TIMEOUT_MS);
+  try {
+    const res = await fetch(built.url, {
+      method: 'POST',
+      headers: built.headers,
+      body: JSON.stringify(built.body),
+      signal: ac.signal,
+    });
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => '');
+      console.error(`[generate:doc] 模型返回 ${res.status}`);
+      void text;
+      throw new AppError('MODEL_ERROR', modelErrorMessage(adapter.provider, res.status));
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let raw = '';
+    let finishReason = '';
+    let usage: TokenUsage | undefined;
+
+    const consumeFrame = (frame: string): boolean => {
+      for (const line of frame.split(/\r?\n/)) {
+        const parsed = adapter.parseChunk(line);
+        if (!parsed) continue;
+        if (parsed.text) {
+          raw += parsed.text;
+          sendDelta(parsed.text);
+        }
+        if (parsed.usage) usage = parsed.usage;
+        if (parsed.finishReason) finishReason = parsed.finishReason;
+        if (parsed.finish) return true;
+        if (parsed.text && isCompleteJsonObject(raw)) return true;
+      }
+      return false;
+    };
+
+    let providerFinished = false;
+    armIdleTimeout();
+    try {
+      readLoop: for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        armIdleTimeout();
+        buffer += decoder.decode(value, { stream: true });
+        let next = nextSseFrame(buffer);
+        while (next) {
+          buffer = next.rest;
+          if (consumeFrame(next.frame)) {
+            providerFinished = true;
+            await reader.cancel().catch(() => undefined);
+            break readLoop;
+          }
+          next = nextSseFrame(buffer);
+        }
+      }
+
+      // 某些网关的最后一帧没有补空行；流关闭时仍要尝试解析残留内容。
+      if (!providerFinished) {
+        buffer += decoder.decode();
+        const tail = buffer.trim();
+        if (tail) consumeFrame(tail);
+      }
+    } finally {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+    }
+
+    if (!raw.trim()) {
+      throw new AppError('MODEL_ERROR', 'AI 服务未返回有效内容，本次不扣积分');
+    }
+    return { content: raw, finishReason, usage };
+  } catch (err) {
+    if (isAbortError(err) && timeoutKind) {
+      throw new AppError(
+        'TIMEOUT',
+        timeoutKind === 'idle'
+          ? 'AI 连续 60 秒没有返回新内容，已停止本次任务，请缩小范围后重试'
+          : 'AI 生成超过 130 秒，已停止本次任务，请缩小范围后重试',
+      );
+    }
+    throw err;
+  } finally {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    if (totalTimer !== undefined) clearTimeout(totalTimer);
+  }
+}
+
+/**
  * 非流式调用一次模型（用于自修复重试）。
  *
  * @param adapter 适配器。
@@ -1282,7 +1464,7 @@ async function callOnce(
   adapter: ReturnType<typeof chooseAdapter>['adapter'],
   req: LlmRequest,
   ctx: { modelId: string; apiBase: string; maxOutputTokens: number; stream: boolean },
-): Promise<string> {
+): Promise<ModelCallResult> {
   const built = adapter.buildRequest(req, ctx);
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), MODEL_TIMEOUT_MS);
@@ -1296,12 +1478,34 @@ async function callOnce(
     if (!res.ok) {
       throw new AppError('MODEL_ERROR', modelErrorMessage(adapter.provider, res.status));
     }
-    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const json = (await res.json()) as {
+      choices?: {
+        message?: { content?: string };
+        finish_reason?: string | null;
+      }[];
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_cache_hit_tokens?: number;
+      };
+    };
     const content = json.choices?.[0]?.message?.content ?? '';
     if (!content.trim()) throw new AppError('MODEL_ERROR', 'AI 服务未返回有效内容，本次不扣积分');
-    return content;
+    const usage = json.usage
+      ? {
+        promptTokens: Number(json.usage.prompt_tokens ?? 0),
+        completionTokens: Number(json.usage.completion_tokens ?? 0),
+        cachedTokens: Number(json.usage.prompt_cache_hit_tokens ?? 0),
+        estimated: false,
+      }
+      : undefined;
+    return {
+      content,
+      finishReason: String(json.choices?.[0]?.finish_reason ?? ''),
+      usage,
+    };
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    if (isAbortError(err)) {
       throw new AppError('TIMEOUT', 'AI 生成超过 90 秒，已停止本次任务，请缩小范围后重试');
     }
     throw err;

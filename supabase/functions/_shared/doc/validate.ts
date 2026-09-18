@@ -252,3 +252,27 @@ export function buildDocRepairPrompt(original: string, errors: readonly string[]
     `${list}\n\n请针对上述问题逐条修正，然后重新输出**完整**的 DocModel JSON（${fenceHint}）。`
   );
 }
+
+/**
+ * 构造「输出被 token 上限截断」时的紧凑修复提示。
+ *
+ * 普通修复提示仍要求完整质量下限，模型很容易在同样的长输出上再次被截断。
+ * 这里明确把“先保证完整 JSON”放在第一位，并给出最小可交付密度；优先缩短文字，
+ * 不允许直接删掉 JSON 尾部或必需字段。
+ */
+export function buildDocCompactRepairPrompt(original: string, errors: readonly string[]): string {
+  const list = errors.map((e, i) => `${i + 1}. ${e}`).join('\n');
+  const fenceHint = '只输出一个 ```json 代码块，代码块外不要有任何文字';
+  return (
+    `${original}\n\n---\n\n` +
+    '你上一次输出在模型 token 上限处被截断，JSON 没有完整结束。\n\n' +
+    `校验发现：\n${list}\n\n` +
+    '请重新输出一份**完整优先的紧凑版** DocModel JSON，必须遵守：\n' +
+    '1. 最高优先级是 JSON 完整闭合，绝不能再次截断，也不能省略顶层字段；\n' +
+    '2. PPT 固定输出 12 页：封面 1 页 + 内容 11 页；每页保留 2~3 个必要正文块，' +
+    '每页备注控制在 30~60 字；只在最能说明知识点的位置保留 3 个 chart，不要输出额外 image；\n' +
+    '3. 非 PPT 文档保留全部必需板块，但压缩解释性长句，删除重复铺垫和重复例子；\n' +
+    '4. 如果空间紧张，优先缩短文字和备注，不能删除 slides / blocks / scene 等必需结构；\n' +
+    `5. ${fenceHint}。`
+  );
+}

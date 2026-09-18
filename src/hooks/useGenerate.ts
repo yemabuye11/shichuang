@@ -94,6 +94,8 @@ let snapshot: GenerateSnapshot = initialSnapshot();
 const listeners = new Set<() => void>();
 let session: generateService.GenerateSession | null = null;
 let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+/** 是否收到过 done / error 终态事件，避免成功收尾时被 onFinish 误判成断流。 */
+let terminalEventReceived = false;
 
 /** 通知所有订阅者。 */
 function emit(): void {
@@ -187,6 +189,7 @@ function handleEvent(event: GenEvent): void {
       // 心跳只用于保活，不改变状态
       break;
     case 'done': {
+      terminalEventReceived = true;
       removeRequest(snapshot.jobId);
       const result = event.data;
       const nextResults = snapshot.results.some((r) => r.appId === result.appId)
@@ -216,6 +219,7 @@ function handleEvent(event: GenEvent): void {
       break;
     }
     case 'error': {
+      terminalEventReceived = true;
       removeRequest(snapshot.jobId);
       patch({
         status: event.data.code === 'CANCELLED' ? 'cancelled' : 'error',
@@ -246,6 +250,7 @@ export function startGenerate(req: GenerateRequest): void {
     request: req,
     startedAt: Date.now(),
   };
+  terminalEventReceived = false;
   emit();
   saveRequest(req.idempotencyKey, req);
   startTimer();
@@ -270,6 +275,23 @@ export function startGenerate(req: GenerateRequest): void {
     },
     onFinish: () => {
       stopTimer();
+      // Edge / 网关可能在未发送 done/error 的情况下关闭 SSE。此时必须把任务
+      // 收尾，避免页面永久停在 63%。
+      if (!terminalEventReceived && isGenerating()) {
+        removeRequest(snapshot.jobId);
+        patch({
+          status: 'error',
+          error: {
+            code: 'NETWORK',
+            message: '生成连接提前结束，积分会自动退还，请重试',
+            refunded: true,
+            creditsBalance: 0,
+            retryable: true,
+          },
+          errorText: '生成连接提前结束，积分会自动退还，请重试',
+          elapsedMs: snapshot.startedAt ? Date.now() - snapshot.startedAt : 0,
+        });
+      }
     },
   });
 }
@@ -300,6 +322,7 @@ export function resetGenerate(): void {
   session = null;
   stopTimer();
   snapshot = initialSnapshot();
+  terminalEventReceived = false;
   emit();
 }
 

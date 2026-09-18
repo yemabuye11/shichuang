@@ -45,6 +45,8 @@ export interface BuiltRequest {
 export interface ParsedChunk {
   text?: string;
   finish?: boolean;
+  /** OpenAI 兼容协议的结束原因；`length` 表示被 max_tokens 截断。 */
+  finishReason?: string;
   usage?: TokenUsage;
 }
 
@@ -101,7 +103,7 @@ export function parseOpenAiChunk(raw: string): ParsedChunk | null {
     };
 
     const text = json.choices?.[0]?.delta?.content ?? '';
-    const finished = json.choices?.[0]?.finish_reason != null;
+    const finishReason = json.choices?.[0]?.finish_reason ?? '';
 
     let usage: TokenUsage | undefined;
     if (json.usage) {
@@ -118,7 +120,7 @@ export function parseOpenAiChunk(raw: string): ParsedChunk | null {
 
     return {
       ...(text ? { text } : {}),
-      ...(finished ? { finish: true } : {}),
+      ...(finishReason ? { finish: true, finishReason } : {}),
       ...(usage ? { usage } : {}),
     };
   } catch {

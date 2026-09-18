@@ -1,0 +1,33 @@
+# 2026-09-18 任务日志：修复长 JSON 生成卡在 63%
+
+- 日期：2026-09-18
+- 角色：后端工程师 / 前端工程师 / QA
+- 任务：排查线上 PPT/文档生成长时间停在 63% 的问题，处理模型长输出截断与流式连接收尾。
+- 完成内容：
+  - 确认线上 Supabase `generate` 为 v34，且部署源码与本地 `main`（`717ce68`）一致，排除旧函数版本未部署。
+  - 定位文档生成此前使用非流式模型请求：模型写 16k 长 JSON 时页面会一直显示 0 B；同时没有读取 OpenAI 兼容响应的 `finish_reason`，输出被 `max_tokens` 截断后只会走普通修复重试，表现为长时间停在 63%。
+  - 文档生成恢复为流式收集：模型每返回一段内容就立即发送 `delta`，并使用 60 秒空闲超时与 130 秒总超时兜底。
+  - OpenAI 兼容适配器新增 `finish_reason` 解析；识别到 `length` 或疑似 JSON 未闭合时，改用“完整优先的紧凑版”修复提示，避免再次生成同样超长内容。
+  - 第二次仍截断时返回明确的 `TOKEN_LIMIT`，由现有失败退款链路全额退还积分。
+  - 前端生成状态机新增 SSE 无终态断流处理，连接提前关闭时立即进入错误收尾，不再永久停在生成中。
+  - 将孤儿任务回收阈值调整为文档流总超时加收尾余量，避免正常长生成被并发检查误回收。
+- 修改的文件：
+  - `supabase/functions/generate/index.ts`
+  - `supabase/functions/_shared/llm/types.ts`
+  - `supabase/functions/_shared/doc/validate.ts`
+  - `src/hooks/useGenerate.ts`
+  - `src/services/http/errors.ts`
+  - `docs/logs/2026-09-18-generation-long-json-fix.md`
+- 验证：
+  - `npm run typecheck`：通过。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - `npm run build`：通过，仅保留既有大 chunk 警告。
+  - `git diff --check`：通过。
+  - 使用 Node 直接验证 `parseOpenAiChunk()`：普通内容正确返回 `text`，`finish_reason='length'` 正确返回 `finishReason='length'`。
+  - 线上真实 PPT 回归尚未在本轮执行，避免未经确认消耗账号积分。
+- 遗留问题：
+  - 当前历史失败任务的 Supabase 运行日志未在本轮取得，无法证明旧任务一定由截断触发；代码中的风险与修复路径已确认。
+  - 真实 PPT 的成功率、首包出现时间、生成耗时和退款结果仍需一次线上回归。
+- 下一步：
+  - 运维：提交并推送修复，确认 GitHub Actions 完成前端发布与 Supabase `generate` 部署。
+  - QA：经账号所有者确认后，用“九年级数学·二次函数第 1 课时 PPT，45 分钟”重新生成一次，记录首包时间、完成状态、页数、导出、积分扣除或退款结果。
