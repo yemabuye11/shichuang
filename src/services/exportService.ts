@@ -732,7 +732,15 @@ export async function exportPptx(model: DocModel, opts: ExportOptions = {}): Pro
   }
 
   const fileName = `${safeFileName(model.meta?.title)}.pptx`;
-  await pptx.writeFile({ fileName });
+  const output = await pptx.write({ outputType: 'blob' });
+  if (!(output instanceof Blob)) throw new Error('PPTX export did not return a Blob');
+  if (new URLSearchParams(window.location.search).has('pptxDebug')) {
+    (window as Window & { __shichuangPptxDebug?: { fileName: string; blob: Blob } }).__shichuangPptxDebug = {
+      fileName,
+      blob: output,
+    };
+  }
+  triggerDownload(output, fileName);
 }
 
 /**
