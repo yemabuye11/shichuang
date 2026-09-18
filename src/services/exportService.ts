@@ -211,18 +211,14 @@ function triggerDownload(blob: Blob, fileName: string): void {
   }, 60_000);
 }
 
-/** 触发下载后返回同一个 blob URL，供自动下载被拦截时提供手动保存入口。 */
-export function triggerPptxDownload(blob: Blob, fileName: string): string {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  a.target = '_self';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => a.remove(), 1000);
-  return url;
+/**
+ * 创建 PPTX 的 Blob URL。
+ *
+ * 下载必须由用户点击真正的 `<a download>` 触发，不能在异步导出完成后自动
+ * `click()`。否则浏览器会把它视为非用户手势并拦截下载。
+ */
+export function createPptxDownloadUrl(blob: Blob): string {
+  return URL.createObjectURL(blob);
 }
 
 const PPT = {

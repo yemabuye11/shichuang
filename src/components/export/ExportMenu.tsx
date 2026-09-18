@@ -40,26 +40,10 @@ export interface ExportMenuProps {
   renderUrl?: string;
 }
 
-interface PptxFallback {
+interface PptxDownload {
   url: string;
   fileName: string;
-  blob: Blob;
 }
-
-interface SaveFileHandle {
-  createWritable(): Promise<{
-    write(data: Blob): Promise<void>;
-    close(): Promise<void>;
-  }>;
-}
-
-type ShowSaveFilePicker = (options: {
-  suggestedName: string;
-  types: Array<{
-    description: string;
-    accept: Record<string, string[]>;
-  }>;
-}) => Promise<SaveFileHandle>;
 
 /** 当前正在进行的导出动作（用于禁用与 loading 态）。 */
 type Busy = 'pptx' | 'docx' | 'link' | null;
@@ -67,7 +51,7 @@ type Busy = 'pptx' | 'docx' | 'link' | null;
 export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.Element {
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
   const [busy, setBusy] = useState<Busy>(null);
-  const [pptxFallback, setPptxFallback] = useState<PptxFallback | null>(null);
+  const [pptxDownload, setPptxDownload] = useState<PptxDownload | null>(null);
   const fallbackUrlRef = useRef<string | null>(null);
   const toast = useToast();
 
@@ -79,8 +63,8 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
 
   useEffect(() => () => releaseFallbackUrl(fallbackUrlRef.current), []);
 
-  const closePptxFallback = (): void => {
-    setPptxFallback(null);
+  const closePptxDownload = (): void => {
+    setPptxDownload(null);
     const url = fallbackUrlRef.current;
     fallbackUrlRef.current = null;
     releaseFallbackUrl(url);
@@ -93,9 +77,9 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
     try {
       const result = await exportService.exportPptx(model, { renderUrl: fullRenderUrl });
       releaseFallbackUrl(fallbackUrlRef.current);
-      const url = exportService.triggerPptxDownload(result.blob, result.fileName);
+      const url = exportService.createPptxDownloadUrl(result.blob);
       fallbackUrlRef.current = url;
-      setPptxFallback({ url, fileName: result.fileName, blob: result.blob });
+      setPptxDownload({ url, fileName: result.fileName });
       toast.success('PPTX 已生成');
     } catch (error) {
       console.error('[ExportMenu] PPTX export failed', error);
@@ -103,39 +87,6 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
     } finally {
       setBusy(null);
     }
-  };
-
-  const handleManualPptxSave = async (): Promise<void> => {
-    if (!pptxFallback) return;
-    const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePicker }).showSaveFilePicker;
-    if (picker) {
-      try {
-        const handle = await picker({
-          suggestedName: pptxFallback.fileName,
-          types: [{
-            description: 'PowerPoint 课件',
-            accept: {
-              'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-            },
-          }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(pptxFallback.blob);
-        await writable.close();
-        toast.success('PPTX 已保存');
-        closePptxFallback();
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
-        console.warn('[ExportMenu] Save picker failed, falling back to download link', error);
-      }
-    }
-    const anchor = document.createElement('a');
-    anchor.href = pptxFallback.url;
-    anchor.download = pptxFallback.fileName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
   };
 
   const handleDocx = async (): Promise<void> => {
@@ -193,21 +144,24 @@ export function ExportMenu({ docId, model, renderUrl }: ExportMenuProps): JSX.El
           复制网页链接
         </MenuItem>
       </Menu>
-      <Dialog open={Boolean(pptxFallback)} onClose={closePptxFallback} fullWidth maxWidth="xs">
+      <Dialog open={Boolean(pptxDownload)} onClose={closePptxDownload} fullWidth maxWidth="xs">
         <DialogTitle>PPTX 已生成</DialogTitle>
         <DialogContent>
           <Typography sx={{ fontSize: 14, wordBreak: 'break-all' }}>
-            {pptxFallback?.fileName}
+            {pptxDownload?.fileName}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={closePptxFallback}>关闭</Button>
+          <Button onClick={closePptxDownload}>关闭</Button>
           <Button
-            onClick={() => void handleManualPptxSave()}
+            component="a"
+            href={pptxDownload?.url}
+            download={pptxDownload?.fileName}
             variant="contained"
             startIcon={<FileDownloadIcon />}
+            onClick={() => toast.success('PPTX 已开始下载')}
           >
-            保存 PPTX
+            下载 PPTX
           </Button>
         </DialogActions>
       </Dialog>
