@@ -31,7 +31,7 @@ import { TypeChip } from '@/components/common/TypeChip';
 import { useToast } from '@/components/common/ToastHost';
 import { useMyApps } from '@/hooks/useMyApps';
 import { useAuth } from '@/hooks/useAuth';
-import { ROUTES, appRunPath } from '@/config/routes';
+import { ROUTES, appRunPath, docRunPath } from '@/config/routes';
 import { copyText } from '@/utils/clipboard';
 import { formatRelativeTime } from '@/utils/format';
 import * as appService from '@/services/appService';
@@ -69,6 +69,9 @@ export function MyAppsPage(): JSX.Element {
     setMenuAnchor(null);
   };
 
+  const openPath = (app: App): string =>
+    app.category === 'doc' ? docRunPath(app.id) : appRunPath(app.id);
+
   const openMenu = (event: React.MouseEvent<HTMLElement>, app: App): void => {
     setActiveApp(app);
     setMenuAnchor(event.currentTarget);
@@ -76,7 +79,7 @@ export function MyAppsPage(): JSX.Element {
 
   const handleCopyLink = async (app: App): Promise<void> => {
     closeMenu();
-    const url = `${window.location.origin}${appRunPath(app.id)}`;
+    const url = `${window.location.origin}${openPath(app)}`;
     const ok = await copyText(url);
     trackService.trackShare(app.id, 'copy_link');
     toast[ok ? 'success' : 'error'](ok ? '链接已复制' : '复制失败，请手动复制');
@@ -138,7 +141,7 @@ export function MyAppsPage(): JSX.Element {
       const copy = await appService.duplicate(activeApp.id);
       toast.success('已复制一份到「未发布」');
       void refresh();
-      navigate(appRunPath(copy.id));
+      navigate(openPath(copy));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '复制失败，请重试');
     }
@@ -213,7 +216,7 @@ export function MyAppsPage(): JSX.Element {
               <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1.5, minHeight: 72 }}>
                 <Box
                   sx={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
-                  onClick={() => navigate(appRunPath(app.id))}
+                  onClick={() => navigate(openPath(app))}
                 >
                   <Typography
                     sx={{
@@ -258,7 +261,7 @@ export function MyAppsPage(): JSX.Element {
           onClick={() => {
             const app = activeApp;
             closeMenu();
-            if (app) navigate(appRunPath(app.id));
+            if (app) navigate(openPath(app));
           }}
         >
           <VisibilityOutlinedIcon sx={{ mr: 1.25, fontSize: 20 }} />

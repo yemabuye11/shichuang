@@ -5,7 +5,8 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { useNavigate } from 'react-router-dom';
 import { AutoCover } from './AutoCover';
 import { TypeChip } from '@/components/common/TypeChip';
-import { appRunPath } from '@/config/routes';
+import { appRunPath, docRunPath } from '@/config/routes';
+import { isDocTypeKey } from '@/config/constants';
 import { formatCount, formatRelativeTime } from '@/utils/format';
 import type { SquareItem } from '@/types/models';
 
@@ -27,7 +28,7 @@ export function AppCard({ item, hot = false, onOpen }: AppCardProps): JSX.Elemen
 
   const handleOpen = (): void => {
     onOpen?.(item.id);
-    navigate(appRunPath(item.id));
+    navigate(isDocTypeKey(item.appType) ? docRunPath(item.id) : appRunPath(item.id));
   };
 
   return (

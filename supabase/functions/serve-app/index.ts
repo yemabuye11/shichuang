@@ -52,9 +52,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // ---- 1.1 文档分支（category='doc'）：平台可信内容，不使用 iframe sandbox ----
   if (app.category === 'doc') {
-    const store = await getStore();
-    let html = await store.getDocHtml(appId, Number(app.html_version ?? 1));
-    if (!html) html = await shadowStore.getDocHtml(appId, Number(app.html_version ?? 1));
+    const version = Number(app.html_version ?? 1);
+    let html: string | null = null;
+
+    // 先读影子副本：它是生成成功时立即写入的稳定兜底，不依赖第三方 CDN 配置。
+    try {
+      html = await shadowStore.getDocHtml(appId, version);
+    } catch (err) {
+      console.warn('[serve-app] 文档影子副本读取失败：', err);
+    }
+
+    // 影子副本尚未写入时再尝试主存储；主存储未配置或临时故障不能让整页 500。
+    if (!html) {
+      try {
+        const store = await getStore();
+        html = await store.getDocHtml(appId, version);
+      } catch (err) {
+        console.warn('[serve-app] 文档主存储读取失败，继续返回友好降级：', err);
+      }
+    }
+
     if (!html) {
       return jsonError(404, { code: 'UNKNOWN', message: '文档还在发布中，请稍后刷新' });
     }

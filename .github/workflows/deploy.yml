@@ -97,6 +97,11 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
+      - name: Deploy serve-app Edge Function (文档/应用回源兜底)
+        run: supabase functions deploy serve-app --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
       - name: Deploy practice Edge Function (每日一练：出题/识别)
         run: supabase functions deploy practice --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
         env:

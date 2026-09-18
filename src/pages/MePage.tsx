@@ -40,8 +40,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useCredits } from '@/hooks/useCredits';
 import { useMyApps } from '@/hooks/useMyApps';
 import { updateProfile } from '@/services/authService';
-import { ROUTES } from '@/config/routes';
-import { appRunPath } from '@/config/routes';
+import { ROUTES, appRunPath, docRunPath } from '@/config/routes';
 import { formatDateTime, formatRelativeTime } from '@/utils/format';
 import type { App } from '@/types/models';
 
@@ -112,8 +111,8 @@ export function MePage(): JSX.Element {
   const publishedApps = apps.filter((a) => a.status === 'published');
   const recentApps = apps.slice(0, 10);
 
-  const openApp = (id: string): void => {
-    navigate(appRunPath(id));
+  const openApp = (app: App): void => {
+    navigate(app.category === 'doc' ? docRunPath(app.id) : appRunPath(app.id));
   };
 
   return (
@@ -426,7 +425,7 @@ export function MePage(): JSX.Element {
 }
 
 /** 我的应用列表行（两个 Tab 复用）。 */
-function MyAppList({ apps, onOpen }: { apps: readonly App[]; onOpen: (id: string) => void }): JSX.Element {
+function MyAppList({ apps, onOpen }: { apps: readonly App[]; onOpen: (app: App) => void }): JSX.Element {
   return (
     <Box sx={{ borderRadius: 2.5, border: '1px solid', borderColor: 'divider', bgcolor: '#fff', overflow: 'hidden' }}>
       {apps.map((app, index) => (
@@ -437,7 +436,7 @@ function MyAppList({ apps, onOpen }: { apps: readonly App[]; onOpen: (id: string
             spacing={1.5}
             alignItems="center"
             sx={{ px: 2, py: 1.5, minHeight: 68, cursor: 'pointer' }}
-            onClick={() => onOpen(app.id)}
+            onClick={() => onOpen(app)}
           >
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography

@@ -8,6 +8,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import EditIcon from '@mui/icons-material/Edit';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DocRenderer } from '@/components/editor/DocRenderer';
+import { ExportMenu } from '@/components/export/ExportMenu';
 import { EmptyState } from '@/components/common/EmptyState';
 import { InlineLoading } from '@/components/common/LoadingOverlay';
 import { AiDisclaimer } from '@/components/common/AiDisclaimer';
@@ -224,6 +225,7 @@ export function DocRunPage(): JSX.Element {
           <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>平台渲染 · 教师核对后即可分享</Typography>
         </Stack>
         <Stack direction="row" spacing={1}>
+          <ExportMenu docId={id ?? ''} model={model} />
           <Button
             variant="outlined"
             size="small"

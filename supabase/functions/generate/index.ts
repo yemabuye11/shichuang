@@ -49,6 +49,14 @@ const MODEL_TIMEOUT_MS = 90_000;
 const DOC_STREAM_IDLE_TIMEOUT_MS = 60_000;
 /** 文档流从发起到收尾的总上限，给 16k 长 JSON 留出余量，同时为退款收尾预留时间。 */
 const DOC_STREAM_MAX_TIMEOUT_MS = 130_000;
+/**
+ * PPT 首次生成的输出上限。
+ *
+ * 0046 提示词要求 15~18 页、逐页配图，模型很容易在 16k token 处写满，
+ * 再叠加硅基流动的生成速度后，130 秒内仍可能写不完。首次先固定 12 页和
+ * 10k token 的“可交付紧凑版”，把可靠产出放在第一位；教师进编辑器后仍可继续补充。
+ */
+const PPT_OUTPUT_TOKEN_CAP = 10_000;
 /** 心跳间隔（毫秒）。 */
 const HEARTBEAT_MS = 10_000;
 /**
@@ -554,11 +562,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
               .eq('id', jobId);
 
             // ---- 5. 调模型（文档类流式收集完整 JSON）----
+            const budgetedUserPrompt = withDocOutputBudget(composed.userPrompt, f);
+            const docMaxOutput = f === 'ppt' ? Math.min(maxOutput, PPT_OUTPUT_TOKEN_CAP) : maxOutput;
+            const docTemperature = f === 'ppt' ? 0.45 : 0.7;
             const llmReq: LlmRequest = {
               systemPrompt: composed.systemPrompt,
-              userPrompt: composed.userPrompt,
-              maxOutputTokens: maxOutput,
-              temperature: 0.7,
+              userPrompt: budgetedUserPrompt,
+              maxOutputTokens: docMaxOutput,
+              temperature: docTemperature,
             };
 
             const startedAt = Date.now();
@@ -584,11 +595,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
               // 模型写长 JSON 时一直显示 0 B；同时以空闲超时和总超时双重兜底。
               const called = await callDocStreaming(
                 adapter,
-                { ...llmReq, userPrompt: composed.userPrompt },
+                llmReq,
                 {
                   modelId: modelCfg?.modelId ?? 'deepseek-chat',
                   apiBase: selectedApiBase,
-                  maxOutputTokens: maxOutput,
+                  maxOutputTokens: docMaxOutput,
                 },
                 (text) => send('delta', { text }),
               );
@@ -605,15 +616,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 finishReason === 'length' ||
                 isProbablyTruncatedDoc(raw);
               const repairPrompt = truncated
-                ? buildDocCompactRepairPrompt(composed.userPrompt, result.errors)
-                : buildDocRepairPrompt(composed.userPrompt, result.errors);
+                ? buildDocCompactRepairPrompt(budgetedUserPrompt, result.errors)
+                : buildDocRepairPrompt(budgetedUserPrompt, result.errors);
               const repaired = await callOnce(adapter, {
                 ...llmReq,
                 userPrompt: repairPrompt,
+                temperature: f === 'ppt' ? 0.3 : llmReq.temperature,
               }, {
                 modelId: modelCfg?.modelId ?? 'deepseek-chat',
                 apiBase: selectedApiBase,
-                maxOutputTokens: maxOutput,
+                maxOutputTokens: docMaxOutput,
                 stream: false,
               });
               raw = repaired.content;
@@ -642,15 +654,31 @@ Deno.serve(async (req: Request): Promise<Response> => {
               createdAt: result.model.createdAt ?? generatedAt,
             };
             const json = JSON.stringify(finalModel);
-            const store = await getStore();
-            const putJson = await store.putDocJson(appId, finalModel.version, json);
             const html = renderDoc(finalModel);
-            const putHtml = await store.putDocHtml(appId, finalModel.version, html);
 
-            if (cfg.artifact.warmup) void store.warmup(putHtml.url);
-            // 影子副本（供 serve-app /d/ 回源兜底）
-            void shadowStore.putDocHtml(appId, finalModel.version, html).catch(() => undefined);
-            void shadowStore.putDocJson(appId, finalModel.version, json).catch(() => undefined);
+            // 先落 Supabase 影子副本，确保“生成成功”后即使 CDN 暂时不可用，
+            // 文档页和回源接口仍能立即读取。它同时是后续失败降级的可靠底座。
+            const [shadowJson, shadowHtml] = await Promise.all([
+              shadowStore.putDocJson(appId, finalModel.version, json),
+              shadowStore.putDocHtml(appId, finalModel.version, html),
+            ]);
+
+            let putJson = shadowJson;
+            let putHtml = shadowHtml;
+            try {
+              const store = await getStore();
+              [putJson, putHtml] = await Promise.all([
+                store.putDocJson(appId, finalModel.version, json),
+                store.putDocHtml(appId, finalModel.version, html),
+              ]);
+              if (cfg.artifact.warmup) void store.warmup(putHtml.url);
+            } catch (storeErr) {
+              // CDN/GitHub Pages 配置或临时故障不能让已经生成并校验通过的文档报废。
+              // 前端与 /d/:id 都以 doc_json_url 为真相源，可继续使用影子副本。
+              console.warn('[generate:doc] 主存储写入失败，改用影子副本继续交付：', storeErr);
+              putJson = shadowJson;
+              putHtml = shadowHtml;
+            }
 
             const title = finalModel.meta?.title || prompt.slice(0, 30);
             const appUpdate = await sb
@@ -1337,6 +1365,30 @@ function isProbablyTruncatedDoc(raw: string): boolean {
 }
 
 /**
+ * 给 PPT 首次生成追加可完成的输出预算。
+ *
+ * 这些动态约束放在 user 消息末尾，不污染 systemPrompt 的稳定缓存前缀。
+ * 明确覆盖数据库提示词里“页数越多越好、逐页配图”的扩展性建议，避免模型
+ * 为了追求篇幅而超过 Edge Function 的 130 秒总时限。
+ *
+ * @param userPrompt 原始 user 消息。
+ * @param docType 文档类型。
+ */
+function withDocOutputBudget(userPrompt: string, docType: string): string {
+  if (docType !== 'ppt') return userPrompt;
+  return (
+    `${userPrompt}\n\n---\n\n` +
+    '# 本次输出预算（最高优先级，覆盖前文的扩展性建议）\n' +
+    '请在 10000 tokens 内完成完整 JSON，必须一口气闭合，不能截断：\n' +
+    '1. 固定输出 12 页：封面、学习目标、情境导入、4 个知识讲解页、2 个例题/活动页、易错提醒、课堂小结、作业布置；\n' +
+    '2. 每页保留 2~3 个正文块，每页 notes 控制在 30~60 字，直接写教师可照读的话；\n' +
+    '3. 全份只在最能说明知识点的 3 页使用 chart，不再生成 image，也不执行前文“逐页配图/15~18 页更好”的建议；\n' +
+    '4. 至少 1 个 table；其余无图页用 list 或 table 结构化表达，内容要能直接上课，避免空泛和重复；\n' +
+    '5. 只输出一个完整 JSON 对象，不要解释过程，不要输出备选方案。'
+  );
+}
+
+/**
  * 流式收集文档 JSON。
  *
  * 与非流式请求相比，模型每吐出一个增量就立即转发到前端，教师不会再长时间看到
@@ -1354,6 +1406,8 @@ async function callDocStreaming(
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let totalTimer: ReturnType<typeof setTimeout> | undefined;
   let timeoutKind: '' | 'idle' | 'total' = '';
+  let raw = '';
+  const startedAt = Date.now();
 
   const abortForTimeout = (kind: 'idle' | 'total'): void => {
     if (ac.signal.aborted) return;
@@ -1383,7 +1437,6 @@ async function callDocStreaming(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let raw = '';
     let finishReason = '';
     let usage: TokenUsage | undefined;
 
@@ -1436,14 +1489,20 @@ async function callDocStreaming(
     if (!raw.trim()) {
       throw new AppError('MODEL_ERROR', 'AI 服务未返回有效内容，本次不扣积分');
     }
+    console.info(
+      `[generate:doc] 模型流完成 provider=${adapter.provider} chars=${raw.length} elapsedMs=${Date.now() - startedAt} finish=${finishReason || 'none'}`,
+    );
     return { content: raw, finishReason, usage };
   } catch (err) {
     if (isAbortError(err) && timeoutKind) {
+      console.warn(
+        `[generate:doc] 模型流超时 provider=${adapter.provider} kind=${timeoutKind} chars=${raw.length} elapsedMs=${Date.now() - startedAt}`,
+      );
       throw new AppError(
         'TIMEOUT',
         timeoutKind === 'idle'
-          ? 'AI 连续 60 秒没有返回新内容，已停止本次任务，请缩小范围后重试'
-          : 'AI 生成超过 130 秒，已停止本次任务，请缩小范围后重试',
+          ? `AI 连续 60 秒没有返回新内容（已收到 ${raw.length} 字），已停止本次任务并退款`
+          : `AI 生成超过 130 秒（已收到 ${raw.length} 字），已停止本次任务并退款`,
       );
     }
     throw err;
