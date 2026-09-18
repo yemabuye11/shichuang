@@ -45,7 +45,7 @@ import {
 import { REFUND_POLICY_TEXT } from '@/config/creditRules';
 import { openCourseResources, type OpenCourseResource } from '@/data/openCourseResources';
 import { uuid } from '@/utils/hash';
-import { inferOutlineTeachingContext } from '@/utils/outlineImport';
+import { estimateOutlinePageCount, inferOutlineTeachingContext } from '@/utils/outlineImport';
 import * as creditService from '@/services/creditService';
 import { isAppType, type AppType } from '@/types/enums';
 import type { Category, DocType } from '@/types/doc';
@@ -223,6 +223,13 @@ export function GeneratePage(): JSX.Element {
     setSubmitting(true);
 
     const jobId = uuid();
+    const outlinePages =
+      creationMode === 'outline' && outlineText
+        ? outline?.pageCount || estimateOutlinePageCount(outlineText)
+        : 0;
+    const requestedPptPages = outlinePages > 0
+      ? Math.min(45, Math.ceil(outlinePages / 3) * 3)
+      : undefined;
     const common = {
       prompt: effectivePrompt,
       subject: advanced.subject || undefined,
@@ -248,6 +255,8 @@ export function GeneratePage(): JSX.Element {
             outlineContent: outlineText || undefined,
             referenceTitle: referenceCourse?.title || undefined,
             referenceSource: referenceCourse?.source || undefined,
+            pptTotalPages: requestedPptPages,
+            pptTotalParts: requestedPptPages ? Math.ceil(requestedPptPages / 3) : undefined,
           }
         : {
             ...common,
@@ -261,6 +270,7 @@ export function GeneratePage(): JSX.Element {
   };
 
   const loadingCost = estimated === null;
+  const outlinePreviewText = outline?.content.trim() ?? '';
 
   return (
     <Box sx={{ py: { xs: 2, sm: 3.5 }, maxWidth: 760, mx: 'auto' }}>
@@ -389,7 +399,13 @@ export function GeneratePage(): JSX.Element {
               {creationMode === 'outline' ? (
                 <>
                   <Typography sx={{ fontSize: 15, fontWeight: 700, mb: 1.25 }}>输出格式</Typography>
-                  <Chip label="PPT 课件" color="primary" variant="outlined" />
+                  <Chip
+                    label={`PPT 课件${outlinePreviewText
+                      ? ` · 预计 ${Math.min(45, Math.ceil((outline?.pageCount || estimateOutlinePageCount(outlinePreviewText)) / 3) * 3)} 页`
+                      : ''}`}
+                    color="primary"
+                    variant="outlined"
+                  />
                 </>
               ) : (
                 <>

@@ -242,7 +242,8 @@ async function runRemote(
   await parseSse(res.body, handlers.onEvent);
 }
 
-const PPT_RESUME_PARTS = 6;
+const PPT_RESUME_DEFAULT_PARTS = 6;
+const PPT_RESUME_MAX_PARTS = 15;
 const PPT_PART_CLIENT_TIMEOUT_MS = 138_000;
 const PPT_PART_MAX_ATTEMPTS = 3;
 const PPT_FULL_MAX_CYCLES = 2;
@@ -268,7 +269,7 @@ interface RemoteCallOutcome {
  * PPT 跨请求续跑。
  *
  * 每个分段请求都由 Edge 平台独立计时，前一段的 JSON 已写入服务端检查点；
- * 网络被网关切断时只重试当前段，不会丢掉已经生成好的页面。六段全部完成后
+ * 网络被网关切断时只重试当前段，不会丢掉已经生成好的页面。全部分段完成后
  * 再单独发一个最终请求做合并、质量门禁、存储和结算。
  */
 async function runRemotePptResumable(
@@ -278,6 +279,14 @@ async function runRemotePptResumable(
   sb: SupabaseClient,
 ): Promise<void> {
   let lastError: ErrorEvent | null = null;
+  const totalParts = Math.min(
+    PPT_RESUME_MAX_PARTS,
+    Math.max(1, Math.floor(req.pptTotalParts ?? PPT_RESUME_DEFAULT_PARTS)),
+  );
+  const totalPages = Math.min(
+    PPT_RESUME_MAX_PARTS * 3,
+    Math.max(3, Math.floor(req.pptTotalPages ?? totalParts * 3)),
+  );
 
   const invokeResumable = async (
     body: GenerateRequest,
@@ -403,7 +412,7 @@ async function runRemotePptResumable(
 
   try {
     for (let cycle = 1; cycle <= PPT_FULL_MAX_CYCLES; cycle += 1) {
-      for (let part = 1; part <= PPT_RESUME_PARTS; part += 1) {
+      for (let part = 1; part <= totalParts; part += 1) {
         const outcome = await callWithRetry({
           ...req,
           category: 'doc',
@@ -411,6 +420,8 @@ async function runRemotePptResumable(
           docTypes: ['ppt'],
           pptResumable: true,
           pptPart: part,
+          pptTotalPages: totalPages,
+          pptTotalParts: totalParts,
           pptFinalize: false,
           pptAbort: false,
         });
@@ -441,6 +452,8 @@ async function runRemotePptResumable(
           docType: 'ppt',
           docTypes: ['ppt'],
           pptResumable: true,
+          pptTotalPages: totalPages,
+          pptTotalParts: totalParts,
           pptFinalize: true,
           pptAbort: false,
         },

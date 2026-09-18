@@ -52,10 +52,14 @@ export interface GenerateRequest {
   modelKey?: string;
   /** 幂等键（前端生成的 UUID），防重复提交重复扣积分。 */
   idempotencyKey: string;
-  /** PPT 可续跑协议：把 18 页拆成多个独立 Edge 请求。 */
+  /** PPT 可续跑协议：把整份课件拆成多个独立 Edge 请求。 */
   pptResumable?: boolean;
-  /** 当前生成的分段序号（1..4）。 */
+  /** 当前生成的分段序号（从 1 开始）。 */
   pptPart?: number;
+  /** 本次课件的总页数；大纲模式按大纲页数自适应。 */
+  pptTotalPages?: number;
+  /** 本次课件的总段数，每段固定 3 页。 */
+  pptTotalParts?: number;
   /** 全部段落完成后合并、校验、保存并结算。 */
   pptFinalize?: boolean;
   /** 多次续跑失败后取消整项并退款。 */

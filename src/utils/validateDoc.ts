@@ -17,8 +17,8 @@ export interface DocValidationResult {
 /** 默认体积上限：256KB。 */
 export const MAX_DOC_BYTES = 262_144;
 
-const PPT_MIN_SLIDES = 14;
-const PPT_MAX_SLIDES = 22;
+const PPT_MIN_SLIDES = 6;
+const PPT_MAX_SLIDES = 45;
 const PPT_MIN_VISUALS = 4;
 const PPT_MIN_NOTES_CHARS = 30;
 const PPT_MIN_BODY_CHARS = 35;

@@ -24,6 +24,7 @@ export interface ImportedOutline {
 
 const MAX_OFFICE_FILE_BYTES = 120 * 1024 * 1024;
 export const MAX_OUTLINE_CHARS = 30_000;
+export const MAX_OUTLINE_PAGES = 45;
 
 const GRADE_PATTERNS: readonly (readonly [RegExp, string])[] = [
   [/幼儿园|学前/, '幼儿园'],
@@ -101,6 +102,35 @@ export function normalizeOutlineText(value: string): string {
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * 估算大纲页数。
+ *
+ * 优先读取“第 N 页 / 第 N 张”等显式页码；没有页码时按一级标题或空行分段的
+ * 章节数估算。返回值为 3~45 页，并会在生成链路中补齐到 3 的倍数。
+ */
+export function estimateOutlinePageCount(value: string): number {
+  const text = normalizeOutlineText(value);
+  if (!text) return 0;
+
+  const numbered = [...text.matchAll(/(?:^|\n)\s*(?:第\s*)?(\d{1,2})\s*(?:页|张)(?=\s|[｜|:：\-—.]|$)/g)]
+    .map((match) => Number.parseInt(match[1] ?? '0', 10))
+    .filter((page) => Number.isFinite(page) && page > 0);
+  if (numbered.length > 0) {
+    return Math.min(MAX_OUTLINE_PAGES, Math.max(3, Math.max(...numbered)));
+  }
+
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const headingCount = lines.filter((line) =>
+    /^(?:#{1,4}\s+|[一二三四五六七八九十]+[、.．]\s*|[（(][一二三四五六七八九十]+[）)]\s*)/.test(line)
+  ).length;
+  if (headingCount > 0) {
+    return Math.min(MAX_OUTLINE_PAGES, Math.max(3, headingCount));
+  }
+
+  const paragraphCount = text.split(/\n\s*\n/).filter((paragraph) => paragraph.trim().length >= 4).length;
+  return Math.min(MAX_OUTLINE_PAGES, Math.max(3, paragraphCount || 18));
 }
 
 /**

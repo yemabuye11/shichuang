@@ -59,8 +59,10 @@ const DOC_STREAM_MAX_TIMEOUT_MS = 180_000;
  * 紧凑修复而不是把半份 JSON 当成成功产物交付。
  */
 const PPT_OUTPUT_TOKEN_CAP = 12_000;
-/** 可续跑 PPT：6 个短请求，每个请求由平台连接独立承载。 */
-const PPT_RESUME_TOTAL_PARTS = 6;
+/** 可续跑 PPT：每段 3 页，每个请求由平台连接独立承载。 */
+const PPT_RESUME_DEFAULT_TOTAL_PARTS = 6;
+const PPT_RESUME_MAX_TOTAL_PARTS = 15;
+const PPT_RESUME_PAGES_PER_PART = 3;
 const PPT_RESUME_PART_MAX_OUTPUT = 4_500;
 const PPT_RESUME_PART_TIMEOUT_MS = 125_000;
 const PPT_CHECKPOINT_BUCKET = 'apps-html';
@@ -310,9 +312,12 @@ interface GenerateBody {
   idempotencyKey?: string;
   /** PPT 可续跑协议：前端按段请求，每段完成后由服务端写检查点。 */
   pptResumable?: boolean;
-  /** 当前生成的分段序号（1..4）。 */
+  /** 当前生成的分段序号（从 1 开始）。 */
   pptPart?: number;
-  /** 全部 4 段完成后，合并、质量校验、存储并结算。 */
+  /** 本次课件总页数与总段数；大纲模式由前端按大纲页数计算。 */
+  pptTotalPages?: number;
+  pptTotalParts?: number;
+  /** 全部分段完成后，合并、质量校验、存储并结算。 */
   pptFinalize?: boolean;
   /** 用户取消或多次重试失败后，退还该 PPT 任务的全部预扣积分。 */
   pptAbort?: boolean;
@@ -325,6 +330,9 @@ interface PptResumeMeta {
   readonly userPrompt: string;
   /** 本次是否导入教师大纲；分段提示词据此决定结构约束。 */
   readonly hasOutline: boolean;
+  /** 整份课件的总页数与总段数。 */
+  readonly totalPages: number;
+  readonly totalParts: number;
   readonly subject?: string;
   readonly grade?: string;
   readonly modelKey: string;
@@ -380,7 +388,7 @@ async function writePptResumeJson(path: string, value: unknown): Promise<void> {
 }
 
 async function removePptResumeFiles(jobId: string, keepMeta = false): Promise<void> {
-  const paths = Array.from({ length: PPT_RESUME_TOTAL_PARTS }, (_, index) =>
+  const paths = Array.from({ length: PPT_RESUME_MAX_TOTAL_PARTS }, (_, index) =>
     pptResumePartPath(jobId, index + 1));
   if (!keepMeta) paths.push(pptResumeMetaPath(jobId));
   await adminClient().storage.from(PPT_CHECKPOINT_BUCKET).remove(paths);
@@ -475,6 +483,9 @@ function createPptResumableResponse(
       let settled = false;
       let currentStage = 'starting';
       const jobId = (body.idempotencyKey ?? '').trim();
+      const hasOutline = Boolean(body.outlineContent?.trim());
+      const requestedTotalPages = normalizePptTotalPages(body.pptTotalPages, hasOutline);
+      const requestedTotalParts = Math.ceil(requestedTotalPages / PPT_RESUME_PAGES_PER_PART);
 
       const send = (event: string, data: unknown): void => {
         if (event === 'stage' && data && typeof data === 'object' && 'stage' in data) {
@@ -616,8 +627,8 @@ function createPptResumableResponse(
             if (html && appRow) {
               send('checkpoint', {
                 jobId,
-                part: PPT_RESUME_TOTAL_PARTS,
-                totalParts: PPT_RESUME_TOTAL_PARTS,
+                part: requestedTotalParts,
+                totalParts: requestedTotalParts,
                 resumed: true,
                 final: true,
               });
@@ -655,6 +666,13 @@ function createPptResumableResponse(
         if (!job.app_id) throw new AppError('STORE_FAILED', 'PPT 草稿不存在，请重新发起生成');
 
         let meta = await readPptResumeJson<PptResumeMeta>(pptResumeMetaPath(jobId));
+        if (meta && (!Number.isFinite(meta.totalPages) || !Number.isFinite(meta.totalParts))) {
+          meta = {
+            ...meta,
+            totalPages: PPT_RESUME_DEFAULT_TOTAL_PARTS * PPT_RESUME_PAGES_PER_PART,
+            totalParts: PPT_RESUME_DEFAULT_TOTAL_PARTS,
+          };
+        }
         if (!meta) {
           send('stage', { stage: 'understand', label: '理解教学需求', status: 'running' });
           let textbookContext = body.textbookContext ?? '';
@@ -701,10 +719,11 @@ function createPptResumableResponse(
             systemPrompt: composed.systemPrompt,
             subject: body.subject,
             grade: body.grade,
-            // 可续跑链路把 18 页预算写入每一段自己的提示词，避免这里再重复
-            // “固定输出 18 页”而让模型在单段请求里继续生成整份课件。
+            // 可续跑链路把整份页数预写入每一段提示词，避免单段请求继续生成整份课件。
             userPrompt: composed.userPrompt,
-            hasOutline: Boolean(body.outlineContent?.trim()),
+            hasOutline,
+            totalPages: requestedTotalPages,
+            totalParts: requestedTotalParts,
             modelKey: modelCfg?.id ?? '',
             runtimeModelId: resolveRuntimeModelId(provider, modelCfg?.provider, modelCfg?.modelId),
             provider,
@@ -725,7 +744,7 @@ function createPptResumableResponse(
         if (body.pptFinalize === true) {
           send('stage', { stage: 'verify', label: '合并并检查整份课件', status: 'running' });
           const checkpoints = await Promise.all(
-            Array.from({ length: PPT_RESUME_TOTAL_PARTS }, (_, index) =>
+            Array.from({ length: meta.totalParts }, (_, index) =>
               readPptResumeJson<PptPartCheckpoint>(pptResumePartPath(jobId, index + 1))),
           );
           const missing = checkpoints
@@ -741,7 +760,13 @@ function createPptResumableResponse(
 
           const parts = checkpoints as PptPartCheckpoint[];
           const mergedRaw = mergePptParts(parts.map((part) => part.content));
-          const merged = validateDoc(mergedRaw, MAX_DOC_BYTES);
+          const merged = validateDoc(
+            mergedRaw,
+            MAX_DOC_BYTES,
+            meta.hasOutline
+              ? { minSlides: meta.totalPages, maxSlides: meta.totalPages }
+              : undefined,
+          );
           if (!merged.ok || !merged.model) {
             console.warn(
               `[generate:ppt-resume] 合并质量校验失败 job=${jobId}: ${merged.errors.slice(0, 8).join(' | ')}`,
@@ -876,8 +901,8 @@ function createPptResumableResponse(
           send('stage', { stage: 'verify', label: '自检与优化', status: 'done' });
           send('checkpoint', {
             jobId,
-            part: PPT_RESUME_TOTAL_PARTS,
-            totalParts: PPT_RESUME_TOTAL_PARTS,
+            part: meta.totalParts,
+            totalParts: meta.totalParts,
             final: true,
           });
           send('done', {
@@ -911,7 +936,7 @@ function createPptResumableResponse(
                 model: meta.modelKey || meta.runtimeModelId,
                 period: currentPeriod(),
                 resumable: true,
-                parts: PPT_RESUME_TOTAL_PARTS,
+                parts: meta.totalParts,
               },
             })
             .then(() => undefined)
@@ -921,7 +946,7 @@ function createPptResumableResponse(
         }
 
         const part = Number(body.pptPart ?? 1);
-        if (!Number.isInteger(part) || part < 1 || part > PPT_RESUME_TOTAL_PARTS) {
+        if (!Number.isInteger(part) || part < 1 || part > meta.totalParts) {
           throw new AppError('VALIDATE_FAILED', 'PPT 分段序号无效，请重新发起生成');
         }
 
@@ -931,7 +956,7 @@ function createPptResumableResponse(
           send('checkpoint', {
             jobId,
             part,
-            totalParts: PPT_RESUME_TOTAL_PARTS,
+            totalParts: meta.totalParts,
             resumed: true,
           });
           close();
@@ -940,7 +965,7 @@ function createPptResumableResponse(
 
         send('stage', {
           stage: 'code',
-          label: `生成第 ${part}/${PPT_RESUME_TOTAL_PARTS} 段`,
+          label: `生成第 ${part}/${meta.totalParts} 段`,
           status: 'running',
         });
         const adapter = getAdapter(meta.provider);
@@ -951,7 +976,7 @@ function createPptResumableResponse(
             userPrompt: withPptPartBudget(meta.userPrompt, part as PptPart, {
               subject: meta.subject,
               grade: meta.grade,
-            }, meta.hasOutline),
+            }, meta.hasOutline, meta.totalPages),
             maxOutputTokens: meta.maxOutputTokens,
             temperature: meta.temperature,
           },
@@ -990,7 +1015,7 @@ function createPptResumableResponse(
         send('checkpoint', {
           jobId,
           part,
-          totalParts: PPT_RESUME_TOTAL_PARTS,
+          totalParts: meta.totalParts,
         });
         close();
       } catch (err) {
@@ -1349,7 +1374,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                 totalTimeoutMs: PPT_RESUME_PART_TIMEOUT_MS,
               };
               const parts = await Promise.all(
-                (Array.from({ length: PPT_RESUME_TOTAL_PARTS }, (_, index) => index + 1) as PptPart[]).map((part) =>
+                (Array.from({ length: PPT_RESUME_DEFAULT_TOTAL_PARTS }, (_, index) => index + 1) as PptPart[]).map((part) =>
                   callDocStreaming(
                     adapter,
                     {
@@ -2230,20 +2255,36 @@ function withDocOutputBudget(
   );
 }
 
+/** 规范化可续跑 PPT 的页数，限制在 3~45 页并补齐到每段 3 页。 */
+function normalizePptTotalPages(value: unknown, hasOutline: boolean): number {
+  const requested = Math.floor(Number(value));
+  if (!hasOutline || !Number.isFinite(requested) || requested <= 0) {
+    return PPT_RESUME_DEFAULT_TOTAL_PARTS * PPT_RESUME_PAGES_PER_PART;
+  }
+  return Math.min(
+    PPT_RESUME_MAX_TOTAL_PARTS * PPT_RESUME_PAGES_PER_PART,
+    Math.max(
+      PPT_RESUME_PAGES_PER_PART,
+      Math.ceil(requested / PPT_RESUME_PAGES_PER_PART) * PPT_RESUME_PAGES_PER_PART,
+    ),
+  );
+}
+
 /**
- * 给 18 页 PPT 的六个分段追加边界。
+ * 给 PPT 的每个分段追加边界。
  *
  * 单次生成 18 页时，上游即使能用也会在 130 秒窗口内被截断。这里把同一课时拆成
  * 六个完整 JSON，再由服务端合并后统一跑质量门禁，既保留课堂流程，也避免
  * 把超时风险转嫁给教师。
  */
-type PptPart = 1 | 2 | 3 | 4 | 5 | 6;
+type PptPart = number;
 
 function withPptPartBudget(
   userPrompt: string,
   part: PptPart,
   context: { subject?: string; grade?: string } = {},
   hasOutline = false,
+  totalPages = PPT_RESUME_DEFAULT_TOTAL_PARTS * PPT_RESUME_PAGES_PER_PART,
 ): string {
   const first = [
     '1. 封面',
@@ -2286,18 +2327,13 @@ function withPptPartBudget(
           : part === 5
             ? fifth
             : sixth;
-  const range = part === 1
-    ? '第 1~3 页'
-    : part === 2
-      ? '第 4~6 页'
-      : part === 3
-        ? '第 7~9 页'
-        : part === 4
-          ? '第 10~12 页'
-          : part === 5
-            ? '第 13~15 页'
-            : '第 16~18 页';
-  const expected = 3;
+  const startPage = (part - 1) * PPT_RESUME_PAGES_PER_PART + 1;
+  const expected = Math.min(
+    PPT_RESUME_PAGES_PER_PART,
+    Math.max(1, totalPages - startPage + 1),
+  );
+  const endPage = startPage + expected - 1;
+  const range = expected === 1 ? `第 ${startPage} 页` : `第 ${startPage}~${endPage} 页`;
   const earlyChildhood = isEarlyChildhoodGrade(context.grade);
   const visualRule = earlyChildhood
     ? '本段至少 1 个教学图示块，统一用 chart 字段承载“童趣教学画面卡”：kind 写 bar，categories 写 2~4 个中文字词、动作、角色或观察画面，values 全部写 1。禁止柱形、折线、坐标轴、百分比和数量对比；平台会改成水、云、雪、太阳、书本等可爱图标卡。\n'
@@ -2306,14 +2342,14 @@ function withPptPartBudget(
     ? `本段面向${context.grade ?? '小学低年级'}${context.subject ? ` ${context.subject}` : ''}课堂：句子短、字大、重点少；优先写学生能看见、能模仿、能开口说的内容；每页至少一个观察、朗读、表演、圈画、连线或口头表达任务。\n`
     : '';
   const structureRule = hasOutline
-    ? `本段必须正好 ${expected} 页，对应导入大纲顺序中的第 ${(part - 1) * expected + 1}~${part * expected} 个主要环节；` +
+    ? `本段必须正好 ${expected} 页，对应导入大纲顺序中的第 ${startPage}~${endPage} 个主要环节；` +
       '页标题要从大纲原意提炼，保留其中出现的关键词、定义、例题和活动。' +
-      '若大纲条目不足，可对当前条目补讲、举例或练习；若条目过多，只合并同一知识点，不能跳过大纲内容。\n'
+      '不得重复其他分段已经使用的主题、标题或活动；若某一环节内容较多，只在本页内拆成讲解、示例和练习，不要另起重复页。\n'
     : `本段必须正好 ${expected} 页，固定顺序：${pages.join('；')}。\n`;
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
-    `这是完整 18 页课件的第 ${part} 段。你只输出 ${range}，` +
+    `这是完整 ${totalPages} 页课件的第 ${part} 段。你只输出 ${range}，` +
     '不要输出另一段，也不要重复封面或目录。\n' +
     structureRule +
     '只输出 PPT 必需字段：kind、meta、blocks、slides、version；本段 blocks 必须固定为 []。\n' +

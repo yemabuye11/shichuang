@@ -73,14 +73,22 @@ export function extractDocJson(raw: string): string {
  * @param raw 模型原始输出。
  * @param maxBytes 体积上限。
  */
-export function validateDoc(raw: string, maxBytes: number = MAX_DOC_BYTES): DocValidationResult {
-  return validateDocInternal(raw, maxBytes, { fullPptQuality: true });
+export function validateDoc(
+  raw: string,
+  maxBytes: number = MAX_DOC_BYTES,
+  pptLimits?: { minSlides: number; maxSlides: number },
+): DocValidationResult {
+  return validateDocInternal(raw, maxBytes, {
+    fullPptQuality: true,
+    minSlides: pptLimits?.minSlides,
+    maxSlides: pptLimits?.maxSlides,
+  });
 }
 
 /**
  * 校验一页数受限的 PPT 分段。
  *
- * 可续跑生成会把 18 页拆成 6 个独立请求。单段不能套用整份 14 页下限，
+ * 可续跑生成会把课件拆成多个独立请求。单段不能套用整份 14 页下限，
  * 但仍需守住每段 3 页、正文、备注和至少一个真实图示的底线。
  */
 export function validatePptPart(
