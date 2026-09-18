@@ -1,0 +1,29 @@
+# 2026-09-18 任务日志：修复 PPTX 下载不可靠
+
+- 日期：2026-09-18
+- 角色：工程师 / QA / 运维
+- 任务：排查线上文档页点击“下载 PPTX”后用户没有收到文件的问题，修复并重新部署。
+- 完成内容：
+  - 检查本机下载记录，确认 `Downloads\我是什么.pptx` 与 `Desktop\我是什么.pptx` 均存在；文件大小均为 458834 字节，ZIP 结构完整，包含 18 张幻灯片和 18 页讲者备注。
+  - 定位到现有流程在异步生成 PPTX 后自动执行 `a.click()`；浏览器会将其识别为非用户手势并拦截自动下载。
+  - 原生 `showSaveFilePicker()` 在当前浏览器策略下还可能被禁用；被禁用后再回退自动点击下载时，用户激活状态已经丢失，因此“保存 PPTX”也可能没有反应。
+  - 导出流程改为“两段式”：菜单点击只负责生成 Blob 并打开完成弹窗，不再自动下载。
+  - 弹窗按钮改为真正的 `<a download>` 链接，用户点击时直接触发浏览器标准下载，不依赖 `showSaveFilePicker()`，也不再执行异步回退。
+  - 清理已废弃的原生保存器类型、写文件代码和 `triggerPptxDownload()` 自动点击逻辑。
+- 修改的文件：
+  - `src/components/export/ExportMenu.tsx`
+  - `src/services/exportService.ts`
+- 验证：
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过，仅有既有大 chunk 警告。
+  - `node scripts/check-functions.mjs`：45/45 通过。
+  - `git diff --check`：通过。
+  - 本地提交：`14e90bb fix: make pptx download user initiated`。
+  - GitHub Actions `35363399883`：提交 `14e90bb` 的前端、`generate`、`serve-app`、`practice`、`exam-paper` 部署成功。
+  - 线上资源核对：`ExportMenu-C8kzVPc2.js` 已包含“下载 PPTX”，且不再包含 `showSaveFilePicker`。
+  - 本机既有下载文件核对：PPTX 为有效 Open XML 包，18 张幻灯片、18 页备注、2 个媒体文件。
+- 遗留问题：
+  - 站点启用了 PWA 缓存；已打开的旧页面需要关闭后重开或强制刷新，才会加载新的直接下载按钮。
+  - 自动化环境无法启动本机 Edge 完成最终系统级下载回归，但线上包结构、真实生成文件和按钮实现均已核对；最终点击落盘需在用户浏览器复核一次。
+- 下一步：
+  - 用户强刷文档页，点击“导出 PPTX”，再点击弹窗中的“下载 PPTX”，确认浏览器下载栏出现文件。
