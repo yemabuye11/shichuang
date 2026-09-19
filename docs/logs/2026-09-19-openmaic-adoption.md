@@ -12,6 +12,6 @@
   - `package.json`
   - `docs/OPENMAIC_ADAPTATION.md`
   - `THIRD_PARTY_NOTICES.md`
-- 验证：`npm run typecheck` 通过；`npm run build` 通过；`node scripts/check-functions.mjs` 为 46/46 通过；`npm run check:ppt-plan` 为 5 组行为断言通过；线上使用二年级语文 6 页大纲完成真实生成，73 秒内成功，结果严格为 6 页，低龄图表已转换为童趣图标卡。
+- 验证：`npm run typecheck` 通过；`npm run build` 通过；`node scripts/check-functions.mjs` 为 46/46 通过；`npm run check:ppt-plan` 为 5 组行为断言通过；线上使用二年级语文 6 页大纲完成真实生成，73 秒内成功，结果严格为 6 页，低龄图表已转换为童趣图标卡；线上编辑修改标题并保存为 v2，切换第 4 页为双栏/对比并保存为 v3；修改后的 PPTX 导出成功，ZIP 校验包含 6 张幻灯片且 edited title 已写入。
 - 遗留问题：多智能体课堂、TTS 语音授课和自包含交互 HTML 尚未接入；需要在后续独立评审安全边界、播放引擎和移动端策略。
-- 下一步：发布前端版式编辑能力，完成在线编辑、保存新版本和 PPTX 导出回归，并补充真实教师大纲回归集。
+- 下一步：补充真实教师大纲回归集，继续比较页面覆盖率、重复率和编辑次数。
