@@ -42,6 +42,12 @@ import {
 } from '../_shared/doc/validate.ts';
 import { renderDoc } from '../_shared/doc/render.ts';
 import { isDocType, type DocBlock, type DocModel } from '../_shared/doc/types.ts';
+import {
+  buildPptPlan,
+  formatPptPlanOverview,
+  formatPptPlanPart,
+  type PptPlan,
+} from '../_shared/doc/pptPlan.ts';
 import { assertUnderMonthlyCap, checkTokenLimit, costOf, currentPeriod } from '../_shared/cost.ts';
 import { getSearchAdapter } from '../_shared/search/index.ts';
 
@@ -341,6 +347,8 @@ interface PptResumeMeta {
   readonly apiBase: string;
   readonly temperature: number;
   readonly maxOutputTokens: number;
+  /** OpenMAIC 式两阶段生成的 Plan 结果；旧任务可缺省。 */
+  readonly plan?: PptPlan;
   readonly createdAt: string;
 }
 
@@ -692,6 +700,13 @@ function createPptResumableResponse(
           }
 
           const typeCfg = await loadAppType('ppt');
+          const pptPlan = buildPptPlan({
+            prompt,
+            outlineContent: body.outlineContent,
+            totalPages: requestedTotalPages,
+            subject: body.subject,
+            grade: body.grade,
+          });
           const composed = await composeDoc({
             docType: 'ppt',
             promptKey: typeCfg?.promptKey ?? '',
@@ -703,7 +718,7 @@ function createPptResumableResponse(
             difficulty: body.difficulty,
             textbookContext,
             templateContent: body.templateContent,
-            outlineContent: body.outlineContent,
+            outlineContent: hasOutline ? formatPptPlanOverview(pptPlan) : undefined,
             referenceTitle: body.referenceTitle,
             referenceSource: body.referenceSource,
           });
@@ -730,6 +745,7 @@ function createPptResumableResponse(
             apiBase: selectedApiBase,
             temperature: 0.35,
             maxOutputTokens: Math.min(maxOutput, PPT_RESUME_PART_MAX_OUTPUT),
+            plan: pptPlan,
             createdAt: new Date().toISOString(),
           };
           await writePptResumeJson(pptResumeMetaPath(jobId), meta);
@@ -976,7 +992,7 @@ function createPptResumableResponse(
             userPrompt: withPptPartBudget(meta.userPrompt, part as PptPart, {
               subject: meta.subject,
               grade: meta.grade,
-            }, meta.hasOutline, meta.totalPages),
+            }, meta.hasOutline, meta.totalPages, meta.plan),
             maxOutputTokens: meta.maxOutputTokens,
             temperature: meta.temperature,
           },
@@ -1049,7 +1065,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const prompt = (body.prompt ?? '').trim();
-  if (prompt.length < 5) {
+  const outlineContent = (body.outlineContent ?? '').trim();
+  // 大纲导入允许课题本身很短（如“我是什么”），此时用大纲正文判断输入是否有效。
+  if (prompt.length < 5 && outlineContent.length < 20) {
     return jsonError(422, { code: 'VALIDATE_FAILED', message: '请把需求写得更具体一些（至少 5 个字）' });
   }
 
@@ -2285,6 +2303,7 @@ function withPptPartBudget(
   context: { subject?: string; grade?: string } = {},
   hasOutline = false,
   totalPages = PPT_RESUME_DEFAULT_TOTAL_PARTS * PPT_RESUME_PAGES_PER_PART,
+  plan?: PptPlan,
 ): string {
   const first = [
     '1. 封面',
@@ -2342,10 +2361,13 @@ function withPptPartBudget(
     ? `本段面向${context.grade ?? '小学低年级'}${context.subject ? ` ${context.subject}` : ''}课堂：句子短、字大、重点少；优先写学生能看见、能模仿、能开口说的内容；每页至少一个观察、朗读、表演、圈画、连线或口头表达任务。\n`
     : '';
   const structureRule = hasOutline
-    ? `本段必须正好 ${expected} 页，对应导入大纲顺序中的第 ${startPage}~${endPage} 个主要环节；` +
-      '页标题要从大纲原意提炼，保留其中出现的关键词、定义、例题和活动。' +
+    ? `本段必须正好 ${expected} 页，严格对应已冻结施工图中的第 ${startPage}~${endPage} 页；` +
+      '页面标题、顺序、关键词、定义、例题和活动必须来自施工图。' +
       '不得重复其他分段已经使用的主题、标题或活动；若某一环节内容较多，只在本页内拆成讲解、示例和练习，不要另起重复页。\n'
     : `本段必须正好 ${expected} 页，固定顺序：${pages.join('；')}。\n`;
+  const planSection = plan
+    ? '\n\n### 已冻结的页面施工图\n' + formatPptPlanPart(plan, part, PPT_RESUME_PAGES_PER_PART)
+    : '';
   return (
     `${userPrompt}\n\n---\n\n` +
     '# 分段输出（最高优先级）\n' +
@@ -2355,7 +2377,13 @@ function withPptPartBudget(
     '只输出 PPT 必需字段：kind、meta、blocks、slides、version；本段 blocks 必须固定为 []。\n' +
     '所有教学内容只能写进 slides，禁止在 blocks 中重复一遍；禁止输出 verifyHints、createdAt、school 等非必需字段。\n' +
     'meta 只保留 title、subject、grade、textbook、duration、difficulty。\n' +
-    '每页保留 2~3 个正文块，notes 写 45~80 字可直接照读的话，并包含追问或学生易错点。\n' +
+    planSection +
+    '\n\n### 页面设计硬约束\n' +
+    '每页只承担一个明确教学功能，页面标题使用施工图中的标题，不能把教师要说的一大段话直接当标题。\n' +
+    '投屏文字只留关键词、步骤、例子和结论；每页 2~3 个正文块，列表 3~5 项，单项尽量不超过 30 个汉字。\n' +
+    '文字太多时先删冗余解释、合并同义要点，禁止靠缩小字号或继续加页面解决。\n' +
+    'process 用 ordered list；对比用 table 或 two_col；关键概念用 callout；需要图示时按施工图指定的视觉方式生成真实内容。\n' +
+    '每页 notes 写 50~100 字教师可直接照着说的话，至少包含一个追问、学生活动或常见错误提醒。\n' +
     visualRule +
     languageRule +
     '禁止输出 data:image/svg+xml、外链图片或长 SVG；图表数据保持简短。\n' +

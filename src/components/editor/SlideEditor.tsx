@@ -4,6 +4,7 @@ import {
   Button,
   Divider,
   IconButton,
+  MenuItem,
   Stack,
   TextField,
   Tooltip,
@@ -39,7 +40,7 @@ function reindex(slides: Slide[]): Slide[] {
 
 /** 生成一个新的空白幻灯片。 */
 function newSlide(index: number): Slide {
-  return { index, title: '新幻灯片', body: [], notes: '' };
+  return { index, title: '新幻灯片', body: [], notes: '', layout: 'content' };
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +197,28 @@ export function SlideEditor({ slides, onChange }: SlideEditorProps): JSX.Element
             onChange={(e) => updateSlide(idx, { title: e.target.value })}
             sx={{ mb: 1.25 }}
           />
+
+          {/* 版式与内容结构分开修改，避免只能通过重排正文间接改变页面 */}
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="页面版式"
+            value={slide.layout ?? 'auto'}
+            onChange={(event) => {
+              const value = event.target.value;
+              updateSlide(idx, {
+                layout: value === 'auto' ? undefined : (value as NonNullable<Slide['layout']>),
+              });
+            }}
+            sx={{ mb: 1.25 }}
+          >
+            <MenuItem value="auto">自动识别</MenuItem>
+            <MenuItem value="title">封面</MenuItem>
+            <MenuItem value="content">内容</MenuItem>
+            <MenuItem value="two_col">双栏 / 对比</MenuItem>
+            <MenuItem value="section">章节过渡</MenuItem>
+          </TextField>
 
           {/* 正文块 */}
           <Stack spacing={1}>

@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:ppt-plan": "node scripts/check-ppt-plan.mjs",
     "icons": "node scripts/gen-icons.mjs"
   },
   "dependencies": {
